@@ -372,8 +372,7 @@ function makeUsage(
 function failResult(
   errorMessage: string,
   startTime: number,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  response?: any,
+  response?: Anthropic.Messages.Message,
 ): ParseResult {
   return {
     success: false,

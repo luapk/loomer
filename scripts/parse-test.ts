@@ -175,7 +175,9 @@ function indent(text: string, prefix: string): string {
 }
 
 main().catch((err) => {
-  console.error(c.red(`Unhandled error: ${err.message}`));
-  console.error(err.stack);
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack : undefined;
+  console.error(c.red(`Unhandled error: ${message}`));
+  if (stack) console.error(stack);
   process.exit(1);
 });
