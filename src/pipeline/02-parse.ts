@@ -51,7 +51,7 @@ export interface ParseOptions {
   apiKey?: string;
   /** Model to use. Defaults to claude-sonnet-4-5-20250929. */
   model?: string;
-  /** Max output tokens. Defaults to 16000 (a full storyboard fits comfortably). */
+  /** Max output tokens. Defaults to 32000 — the Leo storyboard (14 shots) uses ~20-25k tokens. */
   maxTokens?: number;
   /** Whether to log progress to stdout. Defaults to false. */
   verbose?: boolean;
@@ -81,18 +81,20 @@ export async function parseStoryboard(
   }
 
   const model = options.model ?? 'claude-sonnet-4-5-20250929';
-  const maxTokens = options.maxTokens ?? 16000;
+  const maxTokens = options.maxTokens ?? 32000;
   const verbose = options.verbose ?? false;
 
   const client = new Anthropic({ apiKey });
 
   // Convert Zod schema to JSON Schema for the tool definition.
-  // The `target: 'openApi3'` mode produces JSON Schema compatible with
-  // Anthropic's tool input_schema format.
-  const inputSchema = zodToJsonSchema(ParsedStoryboardSchema, {
-    target: 'openApi3',
+  // Use jsonSchema7 target (not openApi3) because openApi3 emits `nullable: true`
+  // which is an OpenAPI extension rejected by Anthropic's schema validator.
+  // The sanitizer below upgrades draft-07 boolean exclusiveMinimum to draft 2020-12.
+  const rawSchema = zodToJsonSchema(ParsedStoryboardSchema, {
+    target: 'jsonSchema7',
     $refStrategy: 'none', // Inline all refs — Anthropic's tool schema works best flat.
   });
+  const inputSchema = sanitizeJsonSchema(rawSchema);
 
   if (verbose) {
     console.log(`[parser] Calling ${model} with ${markdown.length} chars of markdown`);
@@ -187,6 +189,61 @@ export async function parseStoryboard(
     raw_extraction: rawExtraction,
     usage: makeUsage(response, startTime),
   };
+}
+
+// ============================================================================
+// Schema sanitizer
+// ============================================================================
+
+/**
+ * Converts a zod-to-json-schema draft-07 output to draft 2020-12 for Anthropic.
+ *
+ * zod-to-json-schema `jsonSchema7` target emits:
+ *   { "exclusiveMinimum": true, "minimum": N }  (draft-07 boolean form)
+ *
+ * Anthropic requires draft 2020-12:
+ *   { "exclusiveMinimum": N }  (numeric form, no separate minimum)
+ *
+ * Also strips the `$schema` key which Anthropic's validator doesn't need.
+ */
+function sanitizeJsonSchema(schema: unknown): Record<string, unknown> {
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    return {};
+  }
+  const obj = schema as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+
+  for (const [key, val] of Object.entries(obj)) {
+    if (key === '$schema') continue;
+
+    if (key === 'exclusiveMinimum' && val === true && typeof obj['minimum'] === 'number') {
+      out['exclusiveMinimum'] = obj['minimum'];
+      continue;
+    }
+    if (key === 'minimum' && obj['exclusiveMinimum'] === true) {
+      // Already handled above — skip the bare minimum key.
+      continue;
+    }
+    if (key === 'exclusiveMaximum' && val === true && typeof obj['maximum'] === 'number') {
+      out['exclusiveMaximum'] = obj['maximum'];
+      continue;
+    }
+    if (key === 'maximum' && obj['exclusiveMaximum'] === true) {
+      continue;
+    }
+
+    if (Array.isArray(val)) {
+      out[key] = val.map((item) =>
+        typeof item === 'object' && item !== null ? sanitizeJsonSchema(item) : item,
+      );
+    } else if (typeof val === 'object' && val !== null) {
+      out[key] = sanitizeJsonSchema(val);
+    } else {
+      out[key] = val;
+    }
+  }
+
+  return out;
 }
 
 // ============================================================================
