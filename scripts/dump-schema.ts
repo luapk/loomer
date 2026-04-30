@@ -1,4 +1,4 @@
-import { ParsedStoryboardSchema } from '../src/schema/storyboard.js';
+import { ParsedStoryboardSchema } from '../src/schema/storyboard';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 const schema = zodToJsonSchema(ParsedStoryboardSchema, { target: 'openApi3', $refStrategy: 'none' });
 const json = JSON.stringify(schema, null, 2);

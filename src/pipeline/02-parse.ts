@@ -22,8 +22,8 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import {
   ParsedStoryboardSchema,
   type ParsedStoryboard,
-} from '../schema/storyboard.js';
-import { PARSER_SYSTEM_PROMPT } from '../prompts/parser-system.js';
+} from '../schema/storyboard';
+import { PARSER_SYSTEM_PROMPT } from '../prompts/parser-system';
 
 // ============================================================================
 // Types

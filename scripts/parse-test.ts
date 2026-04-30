@@ -19,7 +19,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { parseStoryboard } from '../src/pipeline/02-parse.js';
+import { parseStoryboard } from '../src/pipeline/02-parse';
 
 // ANSI colour helpers — keeps output readable in a terminal
 const c = {

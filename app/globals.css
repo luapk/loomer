@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background: linear-gradient(135deg, #fdf9f3 0%, #faf0f3 35%, #f0f5fb 70%, #fdf9f3 100%);
+    background-attachment: fixed;
+    min-height: 100vh;
+    color: #1c1917;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/60 backdrop-blur-sm border border-white/80;
+  }
+
+  .glass-strong {
+    @apply bg-white/80 backdrop-blur-md border border-white/90;
+  }
+}

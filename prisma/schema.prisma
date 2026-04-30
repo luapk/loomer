@@ -1,0 +1,34 @@
+// Session 2: core storyboard table only.
+// BibleEntity and Shot models come in Session 3 once reference-still
+// generation is wired up.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Storyboard {
+  id              String           @id @default(uuid())
+  title           String
+  source_input    String           @db.Text
+  source_markdown String           @db.Text
+  parsed_json     Json?
+  status          StoryboardStatus @default(DRAFT)
+  created_at      DateTime         @default(now())
+  updated_at      DateTime         @updatedAt
+
+  @@map("storyboards")
+}
+
+enum StoryboardStatus {
+  DRAFT
+  PARSED
+  REFS_PENDING
+  REFS_APPROVED
+  SHOTS_GENERATING
+  COMPLETE
+  FAILED
+}

@@ -2,7 +2,7 @@
  * Quick utility: print the JSON Schema produced by zod-to-json-schema for the
  * top-level ParsedStoryboardSchema. Used to verify Anthropic tool_use compatibility.
  */
-import { ParsedStoryboardSchema } from '../src/schema/storyboard.js';
+import { ParsedStoryboardSchema } from '../src/schema/storyboard';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 const rawSchema = zodToJsonSchema(ParsedStoryboardSchema, {

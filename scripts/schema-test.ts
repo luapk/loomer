@@ -13,7 +13,7 @@
  * Run: tsx scripts/schema-test.ts
  */
 
-import { ParsedStoryboardSchema, type ParsedStoryboard } from '../src/schema/storyboard.js';
+import { ParsedStoryboardSchema, type ParsedStoryboard } from '../src/schema/storyboard';
 
 // ============================================================================
 // Fixture: a minimal valid storyboard
