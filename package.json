@@ -1,0 +1,33 @@
+{
+  "name": "loomer",
+  "version": "0.1.0",
+  "description": "Storyboard-to-stills pipeline. Takes script input through the storyboard skill, extracts a structured spec, generates locked reference stills, then batch-renders shot key frames with Gemini Nano Banana Pro.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "parse": "tsx scripts/parse-test.ts",
+    "parse:leo": "tsx scripts/parse-test.ts samples/leo-and-the-dolphin.md",
+    "build": "tsc",
+    "lint": "eslint src scripts --ext .ts",
+    "format": "prettier --write \"{src,scripts}/**/*.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@google/genai": "^0.3.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.0",
+    "tsx": "^4.15.0",
+    "typescript": "^5.5.0"
+  }
+}
