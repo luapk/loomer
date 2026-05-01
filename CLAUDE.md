@@ -13,8 +13,8 @@ Read `docs/PROJECT_BRIEF.md` section 1 for the full description.
 The build is structured into 5 sessions. Each session ships something testable end-to-end.
 
 - **Session 1** — Parser foundation. **COMPLETE.** Lives at repo root.
-- **Session 2** — Skeleton Next.js app on Vercel + Postgres. (Next up.)
-- **Session 3** — Reference still generation + approval gate.
+- **Session 2** — Skeleton Next.js app on Vercel + Postgres. **COMPLETE.**
+- **Session 3** — Reference still generation + approval gate. (Next up.)
 - **Session 4** — Shot key frame batch generation.
 - **Session 5** — Web share link + PDF export.
 
@@ -36,7 +36,7 @@ These are non-negotiable. If you find yourself wanting to violate one, stop and 
 
 5. **Don't commit secrets.** No API keys in source. Always `.env` + `.env.example`. Always check `.gitignore` covers `.env`.
 
-6. **Don't push to main directly.** Open a PR, even for small changes. The user reviews and merges.
+6. **Push to main only when the user explicitly says to.** Otherwise open a PR.
 
 7. **Don't bundle unrelated changes in one commit.** One logical unit per commit. If you find yourself writing "and also..." in a commit message, split the commit.
 
