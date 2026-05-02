@@ -84,6 +84,10 @@ export async function POST(request: NextRequest) {
       const send = (obj: Record<string, unknown>) =>
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
 
+      const heartbeat = setInterval(() => {
+        try { controller.enqueue(encoder.encode(': heartbeat\n\n')); } catch { /* closed */ }
+      }, 10000);
+
       try {
         // Use the prompt-caching beta so the 105KB skill system prompt is cached
         // server-side. Cache TTL is 5 minutes — subsequent requests skip re-encoding
@@ -134,6 +138,7 @@ export async function POST(request: NextRequest) {
           .catch(() => undefined);
         send({ type: 'error', message: `Generation failed: ${message}`, code: 'GENERATION_ERROR' });
       } finally {
+        clearInterval(heartbeat);
         controller.close();
       }
     },

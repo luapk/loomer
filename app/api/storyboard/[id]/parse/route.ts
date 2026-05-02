@@ -32,6 +32,12 @@ export async function POST(
       const send = (obj: Record<string, unknown>) =>
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
 
+      // SSE comment sent every 10s — keeps the connection alive during gaps
+      // between inputJson events so Vercel doesn't drop the idle stream.
+      const heartbeat = setInterval(() => {
+        try { controller.enqueue(encoder.encode(': heartbeat\n\n')); } catch { /* closed */ }
+      }, 10000);
+
       try {
         const result = await parseStoryboard(markdown, {
           verbose: true,
@@ -66,6 +72,7 @@ export async function POST(
         const message = err instanceof Error ? err.message : String(err);
         send({ type: 'error', message: `Parse failed: ${message}` });
       } finally {
+        clearInterval(heartbeat);
         controller.close();
       }
     },
