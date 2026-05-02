@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/src/components/ui/button';
 import { Textarea } from '@/src/components/ui/textarea';
 import { Badge } from '@/src/components/ui/badge';
@@ -22,9 +22,54 @@ type State =
     }
   | { phase: 'error'; message: string };
 
+const GENERATE_MILESTONES: { ms: number; text: string }[] = [
+  { ms: 0,     text: 'Reading your script…' },
+  { ms: 4000,  text: 'Breaking down scenes and story structure…' },
+  { ms: 10000, text: 'Establishing characters, locations and props…' },
+  { ms: 18000, text: 'Designing shot sequences and coverage…' },
+  { ms: 28000, text: 'Writing camera direction and lens choices…' },
+  { ms: 42000, text: 'Assembling the storyboard…' },
+];
+
+const PARSE_MILESTONES: { ms: number; text: string }[] = [
+  { ms: 0,     text: 'Extracting shot list…' },
+  { ms: 5000,  text: 'Mapping the continuity bible…' },
+  { ms: 12000, text: 'Validating scene integrity…' },
+  { ms: 22000, text: 'Locking the storyboard…' },
+];
+
+function useProgressMessage(active: boolean, milestones: { ms: number; text: string }[]) {
+  const [index, setIndex] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setIndex(0);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      return;
+    }
+    setIndex(0);
+    milestones.forEach((m, i) => {
+      if (i === 0) return;
+      const id = setTimeout(() => setIndex(i), m.ms);
+      // store last timer so we can clear on unmount only (not critical)
+      timerRef.current = id;
+    });
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  return milestones[index]?.text ?? milestones[milestones.length - 1]?.text ?? '';
+}
+
 export default function HomePage() {
   const [script, setScript] = useState('');
   const [state, setState] = useState<State>({ phase: 'empty' });
+
+  const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
+  const parseMessage = useProgressMessage(state.phase === 'parsing', PARSE_MILESTONES);
 
   async function generate() {
     if (!script.trim()) return;
@@ -36,7 +81,13 @@ export default function HomePage() {
       body: JSON.stringify({ script }),
     });
 
-    const data = await res.json() as Record<string, unknown>;
+    let data: Record<string, unknown>;
+    try {
+      data = await res.json() as Record<string, unknown>;
+    } catch {
+      setState({ phase: 'error', message: 'Server error — no response body. Check that ANTHROPIC_API_KEY and DATABASE_URL are set in Vercel.' });
+      return;
+    }
 
     if (!res.ok) {
       const msg = typeof data['error'] === 'string' ? data['error'] : 'Generation failed.';
@@ -58,7 +109,14 @@ export default function HomePage() {
     setState({ phase: 'parsing', id, title, markdown });
 
     const res = await fetch(`/api/storyboard/${id}/parse`, { method: 'POST' });
-    const data = await res.json() as Record<string, unknown>;
+
+    let data: Record<string, unknown>;
+    try {
+      data = await res.json() as Record<string, unknown>;
+    } catch {
+      setState({ phase: 'error', message: 'Server error — no response body.' });
+      return;
+    }
 
     if (!res.ok) {
       setState({ phase: 'error', message: typeof data['error'] === 'string' ? data['error'] : 'Parse failed.' });
@@ -98,9 +156,16 @@ export default function HomePage() {
             disabled={state.phase === 'generating'}
           />
           <div className="flex items-center justify-between">
-            <span className="text-xs text-stone-400">
-              {script.length > 0 ? `${script.length} chars` : 'Tip: include the word "storyboard" if the skill doesn\'t trigger'}
-            </span>
+            {state.phase === 'generating' ? (
+              <span className="text-xs text-stone-500 flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                {generateMessage}
+              </span>
+            ) : (
+              <span className="text-xs text-stone-400">
+                {script.length > 0 ? `${script.length} chars` : 'Tip: include the word "storyboard" if the skill doesn\'t trigger'}
+              </span>
+            )}
             <Button
               onClick={() => { void generate(); }}
               disabled={state.phase === 'generating' || !script.trim()}
@@ -161,6 +226,14 @@ export default function HomePage() {
                 )}
               </Button>
             </div>
+
+            {state.phase === 'parsing' && (
+              <p className="text-xs text-stone-500 flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                {parseMessage}
+              </p>
+            )}
+
             <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed border border-stone-100">
               {state.markdown}
             </pre>
