@@ -61,7 +61,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: message, code: 'SKILL_NOT_FOUND' }, { status: 503 });
   }
 
-  const client = getAnthropicClient();
+  let client;
+  try {
+    client = getAnthropicClient();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: message, code: 'MISSING_API_KEY' }, { status: 503 });
+  }
 
   // Create a placeholder record so we have an ID to return immediately.
   // The markdown will be written once generation completes.
@@ -75,7 +81,7 @@ export async function POST(request: NextRequest) {
   });
 
   try {
-    const response = await client.messages.create({
+    const response = await client!.messages.create({
       model: MODEL,
       max_tokens: 16000,
       system: systemPrompt,

@@ -96,6 +96,32 @@ Three valid moves, in order of preference:
 
 3. **Don't ship workarounds.** If the right answer is "we need a different library" or "the data model needs reshaping," surface that as a discussion. Workarounds become permanent.
 
+## Vercel deployment
+
+### Required environment variables
+
+Set these in the Vercel project dashboard (Settings → Environment Variables):
+
+| Variable | Where to get it |
+|---|---|
+| `DATABASE_URL` | Vercel Postgres dashboard → `.env.local` tab |
+| `ANTHROPIC_API_KEY` | console.anthropic.com → API Keys |
+| `LOOMER_PASSWORD` | pick anything — single-user password gate |
+
+Without all three set, the app will build but requests will 500.
+
+### Auth pattern
+
+Auth is implemented as a Next.js server component layout (not Edge middleware).
+- Protected pages live in `app/(protected)/` — the layout checks `loomer-auth` cookie and redirects to `/login` if missing/wrong.
+- API routes are **not** protected by the layout (layouts don't wrap API routes). Acceptable for v1 — API calls still require a valid `ANTHROPIC_API_KEY`.
+- Don't add Edge middleware back for auth — Next.js 15 Edge bundles include `node:async_hooks` which crashes on Vercel's V8 isolate runtime with `ReferenceError: __dirname`.
+
+### Known deployment quirks
+
+- `vercel.json` must have both `"framework": "nextjs"` and `"outputDirectory": ".next"` — the framework alone isn't enough for Vercel to find `routes-manifest.json`.
+- Build script runs `prisma generate && prisma db push && next build` — `db push` syncs schema on every deploy.
+
 ## Code conventions (summary)
 
 Full version in PROJECT_BRIEF.md section 4. Key points:
