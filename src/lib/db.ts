@@ -1,15 +1,19 @@
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
-// Lazy singleton — PrismaClient is constructed only on the first call to getDb(),
-// which happens at request time (never at build time). This avoids the
-// PrismaClientInitializationError that Prisma 7 throws when no DATABASE_URL is
-// set in the build environment.
+// Lazy singleton — constructed on the first call to getDb() at request time.
+// Prisma 7 requires a driver adapter when prisma.config.ts is present; the
+// url field in schema.prisma is no longer allowed in that configuration.
 let _client: PrismaClient | undefined;
 
 export function getDb(): PrismaClient {
   if (_client) return _client;
-  _client = new PrismaClient();
-  // Reuse across hot-reloads in development
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is not set');
+  }
+  const adapter = new PrismaPg({ connectionString });
+  _client = new PrismaClient({ adapter });
   if (process.env.NODE_ENV !== 'production') {
     (globalThis as Record<string, unknown>)['__loomer_prisma'] = _client;
   }
