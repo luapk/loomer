@@ -92,10 +92,10 @@ export default function HomePage() {
     }
 
     if (!res.ok) {
-      setState({
-        phase: 'error',
-        message: typeof data['error'] === 'string' ? data['error'] : 'Parse failed.',
-      });
+      const base = typeof data['error'] === 'string' ? data['error'] : 'Parse failed.';
+      const details = Array.isArray(data['details']) ? (data['details'] as string[]) : [];
+      const message = details.length > 0 ? `${base}\n\n${details.slice(0, 5).join('\n')}` : base;
+      setState({ phase: 'error', message });
       return;
     }
 

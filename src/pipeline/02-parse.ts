@@ -81,7 +81,7 @@ export async function parseStoryboard(
   }
 
   const model = options.model ?? 'claude-sonnet-4-6';
-  const maxTokens = options.maxTokens ?? 16000;
+  const maxTokens = options.maxTokens ?? 32000;
   const verbose = options.verbose ?? false;
 
   const client = new Anthropic({ apiKey });
