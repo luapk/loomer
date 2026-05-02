@@ -9,7 +9,7 @@ import { Loader2, ChevronRight, AlertTriangle, CheckCircle2 } from 'lucide-react
 type State =
   | { phase: 'empty' }
   | { phase: 'generating'; markdown: string }
-  | { phase: 'parsing'; id: string; title: string; markdown: string }
+  | { phase: 'parsing'; id: string; title: string; markdown: string; charsGenerated: number }
   | {
       phase: 'parsed';
       id: string;
@@ -73,7 +73,7 @@ export default function HomePage() {
   const parseMessage = useProgressMessage(state.phase === 'parsing', PARSE_MILESTONES);
 
   async function doParse(id: string, title: string, markdown: string) {
-    setState({ phase: 'parsing', id, title, markdown });
+    setState({ phase: 'parsing', id, title, markdown, charsGenerated: 0 });
 
     let res: Response;
     try {
@@ -83,30 +83,61 @@ export default function HomePage() {
       return;
     }
 
-    let data: Record<string, unknown>;
-    try {
-      data = (await res.json()) as Record<string, unknown>;
-    } catch {
-      setState({ phase: 'error', message: 'Server error — no response body during parse.' });
+    if (!res.body) {
+      setState({ phase: 'error', message: 'Server returned no response body during parse.' });
       return;
     }
 
     if (!res.ok) {
-      const base = typeof data['error'] === 'string' ? data['error'] : 'Parse failed.';
-      const details = Array.isArray(data['details']) ? (data['details'] as string[]) : [];
-      const message = details.length > 0 ? `${base}\n\n${details.slice(0, 5).join('\n')}` : base;
-      setState({ phase: 'error', message });
+      let data: Record<string, unknown> = {};
+      try { data = (await res.json()) as Record<string, unknown>; } catch { /* ignore */ }
+      setState({ phase: 'error', message: typeof data['error'] === 'string' ? data['error'] : 'Parse failed.' });
       return;
     }
 
-    setState({
-      phase: 'parsed',
-      id,
-      title,
-      markdown,
-      parsedJson: data['storyboard'],
-      warnings: Array.isArray(data['warnings']) ? (data['warnings'] as string[]) : [],
-    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          if (!part.startsWith('data: ')) continue;
+          const payload = JSON.parse(part.slice(6)) as Record<string, unknown>;
+
+          if (payload['type'] === 'progress') {
+            const chars = payload['chars'] as number;
+            setState((prev) =>
+              prev.phase === 'parsing' ? { ...prev, charsGenerated: chars } : prev,
+            );
+          } else if (payload['type'] === 'done') {
+            setState({
+              phase: 'parsed',
+              id,
+              title,
+              markdown,
+              parsedJson: payload['storyboard'],
+              warnings: Array.isArray(payload['warnings']) ? (payload['warnings'] as string[]) : [],
+            });
+            return;
+          } else if (payload['type'] === 'error') {
+            const base = (payload['message'] as string | undefined) ?? 'Parse failed.';
+            const details = Array.isArray(payload['details']) ? (payload['details'] as string[]) : [];
+            setState({ phase: 'error', message: details.length > 0 ? `${base}\n\n${details.slice(0, 5).join('\n')}` : base });
+            return;
+          }
+        }
+      }
+    } catch {
+      setState({ phase: 'error', message: 'Lost connection during parse.' });
+    }
   }
 
   async function generate() {
@@ -288,6 +319,11 @@ export default function HomePage() {
               <p className="text-xs text-stone-500 flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
                 {parseMessage}
+                {state.phase === 'parsing' && state.charsGenerated > 0 && (
+                  <span className="text-stone-400">
+                    · {state.charsGenerated.toLocaleString()} chars
+                  </span>
+                )}
               </p>
             )}
 

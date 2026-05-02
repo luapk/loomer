@@ -49,12 +49,14 @@ export interface ParseResult {
 export interface ParseOptions {
   /** Anthropic API key. Defaults to process.env.ANTHROPIC_API_KEY. */
   apiKey?: string;
-  /** Model to use. Defaults to claude-sonnet-4-5-20250929. */
+  /** Model to use. Defaults to claude-sonnet-4-6. */
   model?: string;
   /** Max output tokens. Defaults to 32000 — the Leo storyboard (14 shots) uses ~20-25k tokens. */
   maxTokens?: number;
   /** Whether to log progress to stdout. Defaults to false. */
   verbose?: boolean;
+  /** Called incrementally as the tool-use JSON is generated. Useful for streaming progress. */
+  onProgress?: (charsGenerated: number) => void;
 }
 
 // ============================================================================
@@ -100,11 +102,11 @@ export async function parseStoryboard(
     console.log(`[parser] Calling ${model} with ${markdown.length} chars of markdown`);
   }
 
-  // Use the prompt-caching beta so the parser system prompt is cached server-side.
-  // The parser system prompt is ~2k tokens; caching saves re-encoding on every call.
+  // Use the prompt-caching beta stream so we can fire onProgress as JSON is generated,
+  // and cache the parser system prompt server-side.
   let response: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage;
   try {
-    response = await client.beta.promptCaching.messages.create({
+    const messageStream = client.beta.promptCaching.messages.stream({
       model,
       max_tokens: maxTokens,
       system: [{ type: 'text', text: PARSER_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
@@ -117,13 +119,18 @@ export async function parseStoryboard(
         },
       ],
       tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [
-        {
-          role: 'user',
-          content: markdown,
-        },
-      ],
+      messages: [{ role: 'user', content: markdown }],
     });
+
+    if (options.onProgress) {
+      let charsGenerated = 0;
+      messageStream.on('inputJson', (partialJson) => {
+        charsGenerated += partialJson.length;
+        options.onProgress!(charsGenerated);
+      });
+    }
+
+    response = await messageStream.finalMessage();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return failResult(`Anthropic API error: ${message}`, startTime);
