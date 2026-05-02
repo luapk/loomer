@@ -40,7 +40,7 @@ export interface ParseResult {
   usage: {
     input_tokens: number;
     output_tokens: number;
-    /** Approximate cost in USD at current Sonnet 4.5 pricing ($3/M input, $15/M output). */
+    /** Approximate cost in USD at current Sonnet 4.6 pricing ($3/M input, $15/M output). */
     estimated_cost_usd: number;
     duration_ms: number;
   };
@@ -364,16 +364,10 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
     );
   }
 
-  // Check 6: every prompt is non-trivially long
+  // Check 6: key_frame_prompt is non-trivially long
   // (a 50-char prompt is almost certainly a parser miss)
   for (const shot of sb.shots) {
-    if (shot.veo_prompt.length < 100) {
-      warnings.push(`Shot ${shot.shot_number} has suspiciously short Veo prompt (${shot.veo_prompt.length} chars)`);
-    }
-    if (shot.kling_prompt.length < 100) {
-      warnings.push(`Shot ${shot.shot_number} has suspiciously short Kling prompt (${shot.kling_prompt.length} chars)`);
-    }
-    if (shot.key_frame_prompt.length < 50) {
+    if (shot.key_frame_prompt.length < 100) {
       warnings.push(`Shot ${shot.shot_number} has suspiciously short key frame prompt (${shot.key_frame_prompt.length} chars)`);
     }
   }
@@ -396,17 +390,15 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
     }
   }
 
-  // Check 8: Bible verbatim injection — characters/locations in a shot
-  // should appear in the Veo prompt by their visual description.
-  // We do a loose check: the Veo prompt should contain the character's
-  // name (or distinctive substring of full_description).
+  // Check 8: Bible verbatim injection — characters in a shot should appear
+  // in the key_frame_prompt by name.
   for (const shot of sb.shots) {
     for (const charId of shot.continuity.characters) {
       const char = sb.characters.find((c) => c.id === charId);
       if (!char) continue; // already warned above
-      if (!shot.veo_prompt.includes(char.name)) {
+      if (!shot.key_frame_prompt.includes(char.name)) {
         warnings.push(
-          `Shot ${shot.shot_number}: character ${charId} (${char.name}) is in continuity but name does not appear in Veo prompt — possible Bible-injection failure`,
+          `Shot ${shot.shot_number}: character ${charId} (${char.name}) is in continuity but name does not appear in key_frame_prompt — possible Bible-injection failure`,
         );
       }
     }
