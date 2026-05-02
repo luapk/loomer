@@ -114,10 +114,6 @@ const VALID_FIXTURE: ParsedStoryboard = {
       },
       duration: { veo: 6, kling: 5 },
       chain_instruction: null,
-      veo_prompt:
-        'Wide shot, eye-level, static lock-off camera, 35mm lens at f/8, deep focus throughout. A long galley kitchen interior — sink and window on the left wall, oak island down centre, archway visible at far end, cream walls, brass fittings, lived-in domestic feel. The kitchen is empty. Hard afternoon sunlight from the camera-left window rakes across the oak surface; deep shadow on the camera-right walls; faint dust visible in the light beam. Late afternoon ~4:30pm. Kodak Vision3 500T fine grain, slight halation in highlights, restrained palette. SFX: a kettle hisses on the range. Ambient: quiet domestic interior, faint fridge hum. No music. Style: Roger Deakins architectural composition, naturalistic.',
-      kling_prompt:
-        'SUBJECT: An empty long galley kitchen interior with sink and window on left wall, oak island down centre, archway at far end, cream walls, brass fittings.\nACTION: The kitchen is empty and still; hard afternoon light rakes across the oak surface; faint dust drifts in the light beam.\nENVIRONMENT: Edwardian terraced house kitchen, late afternoon ~4:30pm.\nCAMERA: Wide shot, eye-level, static lock-off, no pan, no tilt, no zoom, 35mm lens at f/8.\nLIGHTING: Hard afternoon sun from camera-left window raking across oak; deep shadow opposite.\nSTYLE: Cinematic photoreal, Kodak Vision3 500T fine grain, restrained palette, Roger Deakins.',
       key_frame_prompt:
         'Wide shot, eye-level, static, 35mm lens at f/8, deep focus. A long galley kitchen — sink and window on left wall, oak island down centre, archway at far end, cream walls, brass fittings. Hard afternoon sunlight from camera-left window raking across the oak surface, deep shadow on opposite walls, faint dust in the light beam. Empty room. Kodak Vision3 500T grain, restrained palette, Roger Deakins architectural composition.',
     },
@@ -155,10 +151,6 @@ const VALID_FIXTURE: ParsedStoryboard = {
       },
       duration: { veo: 8, kling: 10 },
       chain_instruction: 'CHAIN: end-frame-of-01 → start-frame-of-02 (continuous time, same lighting)',
-      veo_prompt:
-        'Medium shot, eye-level, static lock-off camera, 35mm lens at f/2.8, shallow depth of field. Maya, 34, Black woman with shoulder-length tightly curled black hair worn loose, faint scar above her right eyebrow, wearing faded blue surgeon scrubs and a thin gold chain — walks into frame from the archway at the far end of the long galley kitchen, stops at the oak island down the centre, places her hands flat on the oak surface, exhales. Hard afternoon sunlight from the camera-left window rakes across the island, the kitchen as previously established. Kodak Vision3 500T fine grain, restrained palette, naturalistic skin texture with visible fine pores. SFX: footsteps on hardwood floor. Ambient: quiet domestic interior. No music. Style: Roger Deakins.',
-      kling_prompt:
-        'SUBJECT: Maya, 34, Black woman, shoulder-length curly black hair, faint scar above right eyebrow, faded blue surgeon scrubs, thin gold chain.\nACTION: Walks into frame from the far archway, stops at the oak island, places hands flat on the surface, exhales.\nENVIRONMENT: Long galley kitchen, oak island centre, hard afternoon sun raking from left.\nCAMERA: Medium shot, eye-level, static lock-off, 35mm at f/2.8.\nLIGHTING: Hard sun from camera-left, deep shadow opposite.\nSTYLE: Cinematic photoreal, Kodak Vision3 500T grain, Roger Deakins.',
       key_frame_prompt:
         'Medium shot, eye-level, static, 35mm at f/2.8, shallow depth. Maya, 34, Black woman with shoulder-length tightly curled black hair, faint scar above right eyebrow, wearing faded blue surgeon scrubs and a thin gold chain — standing at an oak island in a long galley kitchen, hands flat on the surface. Hard afternoon sun from camera-left raking across the island. Kodak Vision3 500T grain, restrained palette, Roger Deakins.',
     },
@@ -291,12 +283,10 @@ test('character has both descriptions populated', () => {
   if (maya.reference_still_prompt.length < 50) throw new Error('reference_still_prompt too short');
 });
 
-test('shot has all three prompts populated', () => {
+test('shot has key_frame_prompt populated', () => {
   const sb = ParsedStoryboardSchema.parse(VALID_FIXTURE);
   const shot = sb.shots[0];
   if (!shot) throw new Error('no shot');
-  if (shot.veo_prompt.length < 100) throw new Error('veo_prompt too short');
-  if (shot.kling_prompt.length < 100) throw new Error('kling_prompt too short');
   if (shot.key_frame_prompt.length < 50) throw new Error('key_frame_prompt too short');
 });
 

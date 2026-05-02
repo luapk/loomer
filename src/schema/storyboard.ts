@@ -284,33 +284,10 @@ export const ShotSchema = z.object({
       'Chain instruction if any — e.g. "CHAIN: end-frame-of-04 → start-frame-of-05". null if standalone.',
     ),
 
-  veo_prompt: z
-    .string()
-    .describe(
-      'The full Veo 3.1 prompt, verbatim, ready to paste into the Veo API. Include audio inline (dialogue in quotes, SFX:, Ambient:). Bible descriptions must be present verbatim.',
-    ),
-
-  kling_prompt: z
-    .string()
-    .describe(
-      'The full Kling 2.5/2.6 prompt, verbatim, with the SUBJECT / ACTION / ENVIRONMENT / CAMERA / LIGHTING / STYLE structure preserved.',
-    ),
-
-  /**
-   * Key frame prompt for Nano Banana / Gemini Image generation.
-   *
-   * The parser DERIVES this from the veo_prompt by stripping the audio
-   * directives (SFX:, Ambient:, dialogue quotes) and any motion-specific
-   * verbs ("dollies in over the duration"), keeping the static visual
-   * description (composition, subject, environment, lighting, style).
-   *
-   * This is what gets sent to Gemini at shot generation time, alongside
-   * the relevant character/location/prop reference stills as conditioning.
-   */
   key_frame_prompt: z
     .string()
     .describe(
-      'A still-image prompt derived from the veo_prompt: composition, subject, environment, lighting, style — but no audio, no motion verbs, no temporal language. Roughly 80-150 words. This will be sent to Gemini Nano Banana to generate the shot key frame.',
+      'A still-image prompt for Gemini Nano Banana: composition, subject (Bible descriptions verbatim), environment, lighting, style lock — no audio, no motion verbs, no temporal language. ~80-150 words. This is the primary image generation prompt for the shot key frame, sent alongside character/location/prop reference stills as conditioning.',
     ),
 });
 

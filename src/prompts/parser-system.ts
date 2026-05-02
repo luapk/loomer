@@ -48,10 +48,6 @@ rest empty.
 
   - All entity IDs (CHAR-*, LOC-*, PROP-*) — copy exactly, preserving case
     and hyphens. Do not normalise, lowercase, or "clean up" IDs.
-  - veo_prompt and kling_prompt — copy the entire prompt block exactly as
-    it appears in the markdown, including line breaks where present.
-    These prompts are paste-ready for the generation APIs; any paraphrase
-    breaks downstream consistency.
   - style_lock.raw_block — copy the entire fenced block from the Style lock
     section verbatim, including line breaks.
   - full_description fields on Bible entities — assemble from the entity's
@@ -59,9 +55,15 @@ rest empty.
     multi-line field values into flowing prose if needed for the prompt
     injection use case, but every visual detail must survive.
 
+**Do NOT extract Veo or Kling prompts.**
+
+The source markdown contains "#### Veo 3.1 prompt" and "#### Kling 2.5 prompt"
+sections per shot. **Ignore them completely.** Do not copy them into any field.
+The schema has no veo_prompt or kling_prompt fields.
+
 **Derived fields you must construct:**
 
-These two are not in the source — you generate them from the Bible content:
+These are not copied verbatim — you generate them from the source content:
 
   - reference_still_prompt (on each Character / Location / Prop)
 
@@ -89,26 +91,30 @@ These two are not in the source — you generate them from the Bible content:
 
   - key_frame_prompt (on each Shot)
 
-    Derive from the veo_prompt by stripping:
-      - Audio directives (SFX:, Ambient:, dialogue in quotes, "No music")
-      - Motion verbs over time ("dollies in over the duration", "tracks
-        from left to right", "starts on X, ends on Y")
-      - Temporal language ("first 2 seconds...", "halfway through...")
-      - Beat markers ([0.0s-1.5s])
+    This is the PRIMARY image generation prompt for the shot. Construct it
+    from the shot's Grammar, Continuity, and Action/beat fields — NOT from
+    the Veo or Kling prompt blocks (which you are ignoring).
 
-    Keep:
-      - Composition (scale, angle, lens)
-      - Subject description (Bible verbatim)
-      - Environment description (Bible verbatim)
-      - Lighting (source, behaviour)
-      - Style lock
-      - The single representative MOMENT this shot is built around
+    Include:
+      - Composition (scale, angle, lens from grammar)
+      - Subject: the character(s) in the shot, using their Bible description
+        verbatim (full visual details — face, hair, build, wardrobe)
+      - Environment: the location, using its Bible description verbatim
+        (geography, palette, lighting, textures)
+      - The central action beat — the dramatically central MOMENT this shot
+        is built around (for a push-in, the closest-to-subject end frame;
+        for a reveal, the reveal moment; for a held look, the locked moment)
+      - Lighting from continuity (direction, quality, time of day)
+      - Style lock (look, lens, colour grade — abbreviated form)
+
+    Exclude:
+      - Audio (no SFX, no dialogue, no music)
+      - Motion over time ("tracks from...", "dollies in over the duration")
+      - Temporal language ("first 2 seconds...", "halfway through...")
 
     The result is a paragraph-form still-image prompt of ~80-150 words that
-    Nano Banana can generate as the shot's key frame. The key frame should
-    represent the dramatically central moment of the shot — for a slow
-    push-in, the END of the push (closest to subject); for a reveal, the
-    moment the reveal completes; for a held look, the locked moment.
+    Gemini Nano Banana can generate as the shot's key frame, alongside
+    character/location/prop reference stills as conditioning images.
 
 **Field-level rules:**
 
@@ -138,8 +144,9 @@ language; don't paraphrase.
 
   1. **Hallucinating entities.** If you can't find a Bible block for a
      character, do not invent fields. Better to omit than to fabricate.
-  2. **Paraphrasing prompts.** The Veo and Kling prompts are paste-ready;
-     any rewrite breaks downstream pipeline. Copy the entire block.
+  2. **Thin key_frame_prompt.** The key frame prompt is the primary image
+     generation input. Include Bible descriptions verbatim — don't summarise
+     characters as "a boy" when the Bible has 150 words of visual detail.
   3. **Splitting prompts at line breaks.** Veo prompts in particular are
      paragraph-form; preserve them as a single string.
   4. **Forgetting state-transition props.** PROP entries describe state

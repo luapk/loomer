@@ -110,15 +110,13 @@ async function main() {
 
   console.log(c.bold(`Shots:`));
   for (const shot of sb.shots) {
-    const veoLen = shot.veo_prompt.length;
-    const klingLen = shot.kling_prompt.length;
     const keyFrameLen = shot.key_frame_prompt.length;
     console.log(
       `  ${String(shot.shot_number).padStart(2, '0')}. ` +
         `${shot.grammar.scale.padEnd(4)} | ` +
         `${shot.continuity.location_id.padEnd(30).slice(0, 30)} | ` +
         `${shot.duration.veo}s/${shot.duration.kling}s | ` +
-        c.dim(`veo:${veoLen} kling:${klingLen} kf:${keyFrameLen}`),
+        c.dim(`kf:${keyFrameLen}`),
     );
     console.log(c.dim(`      ${shot.descriptor}`));
   }
@@ -143,15 +141,9 @@ async function main() {
   // Show one shot's prompts in full so we can sanity-check verbatim extraction
   const sampleShot = sb.shots.length > 0 ? sb.shots[Math.floor(sb.shots.length / 2)] : undefined;
   if (sampleShot) {
-    console.log(c.bold(`Sample shot ${sampleShot.shot_number} prompts (middle of sequence):`));
+    console.log(c.bold(`Sample shot ${sampleShot.shot_number} key frame prompt (middle of sequence):`));
     console.log();
-    console.log(c.cyan(`  --- Veo 3.1 prompt ---`));
-    console.log(c.dim(indent(sampleShot.veo_prompt, '    ')));
-    console.log();
-    console.log(c.cyan(`  --- Kling 2.5 prompt ---`));
-    console.log(c.dim(indent(sampleShot.kling_prompt, '    ')));
-    console.log();
-    console.log(c.cyan(`  --- Key frame prompt (derived) ---`));
+    console.log(c.cyan(`  --- Key frame prompt ---`));
     console.log(c.dim(indent(sampleShot.key_frame_prompt, '    ')));
     console.log();
   }

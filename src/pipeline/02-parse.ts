@@ -40,7 +40,7 @@ export interface ParseResult {
   usage: {
     input_tokens: number;
     output_tokens: number;
-    /** Approximate cost in USD at current Sonnet 4.5 pricing ($3/M input, $15/M output). */
+    /** Approximate cost in USD at current Sonnet 4.6 pricing ($3/M input, $15/M output). */
     estimated_cost_usd: number;
     duration_ms: number;
   };
@@ -49,12 +49,14 @@ export interface ParseResult {
 export interface ParseOptions {
   /** Anthropic API key. Defaults to process.env.ANTHROPIC_API_KEY. */
   apiKey?: string;
-  /** Model to use. Defaults to claude-sonnet-4-5-20250929. */
+  /** Model to use. Defaults to claude-sonnet-4-6. */
   model?: string;
   /** Max output tokens. Defaults to 32000 — the Leo storyboard (14 shots) uses ~20-25k tokens. */
   maxTokens?: number;
   /** Whether to log progress to stdout. Defaults to false. */
   verbose?: boolean;
+  /** Called incrementally as the tool-use JSON is generated. Useful for streaming progress. */
+  onProgress?: (charsGenerated: number) => void;
 }
 
 // ============================================================================
@@ -80,7 +82,7 @@ export async function parseStoryboard(
     return failResult('ANTHROPIC_API_KEY not set', startTime);
   }
 
-  const model = options.model ?? 'claude-sonnet-4-5-20250929';
+  const model = options.model ?? 'claude-sonnet-4-6';
   const maxTokens = options.maxTokens ?? 32000;
   const verbose = options.verbose ?? false;
 
@@ -100,12 +102,14 @@ export async function parseStoryboard(
     console.log(`[parser] Calling ${model} with ${markdown.length} chars of markdown`);
   }
 
-  let response: Anthropic.Messages.Message;
+  // Use the prompt-caching beta stream so we can fire onProgress as JSON is generated,
+  // and cache the parser system prompt server-side.
+  let response: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage;
   try {
-    response = await client.messages.create({
+    const messageStream = client.beta.promptCaching.messages.stream({
       model,
       max_tokens: maxTokens,
-      system: PARSER_SYSTEM_PROMPT,
+      system: [{ type: 'text', text: PARSER_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
       tools: [
         {
           name: TOOL_NAME,
@@ -115,13 +119,18 @@ export async function parseStoryboard(
         },
       ],
       tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [
-        {
-          role: 'user',
-          content: markdown,
-        },
-      ],
+      messages: [{ role: 'user', content: markdown }],
     });
+
+    if (options.onProgress) {
+      let charsGenerated = 0;
+      messageStream.on('inputJson', (partialJson) => {
+        charsGenerated += partialJson.length;
+        options.onProgress!(charsGenerated);
+      });
+    }
+
+    response = await messageStream.finalMessage();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return failResult(`Anthropic API error: ${message}`, startTime);
@@ -355,16 +364,10 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
     );
   }
 
-  // Check 6: every prompt is non-trivially long
+  // Check 6: key_frame_prompt is non-trivially long
   // (a 50-char prompt is almost certainly a parser miss)
   for (const shot of sb.shots) {
-    if (shot.veo_prompt.length < 100) {
-      warnings.push(`Shot ${shot.shot_number} has suspiciously short Veo prompt (${shot.veo_prompt.length} chars)`);
-    }
-    if (shot.kling_prompt.length < 100) {
-      warnings.push(`Shot ${shot.shot_number} has suspiciously short Kling prompt (${shot.kling_prompt.length} chars)`);
-    }
-    if (shot.key_frame_prompt.length < 50) {
+    if (shot.key_frame_prompt.length < 100) {
       warnings.push(`Shot ${shot.shot_number} has suspiciously short key frame prompt (${shot.key_frame_prompt.length} chars)`);
     }
   }
@@ -387,17 +390,15 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
     }
   }
 
-  // Check 8: Bible verbatim injection — characters/locations in a shot
-  // should appear in the Veo prompt by their visual description.
-  // We do a loose check: the Veo prompt should contain the character's
-  // name (or distinctive substring of full_description).
+  // Check 8: Bible verbatim injection — characters in a shot should appear
+  // in the key_frame_prompt by name.
   for (const shot of sb.shots) {
     for (const charId of shot.continuity.characters) {
       const char = sb.characters.find((c) => c.id === charId);
       if (!char) continue; // already warned above
-      if (!shot.veo_prompt.includes(char.name)) {
+      if (!shot.key_frame_prompt.includes(char.name)) {
         warnings.push(
-          `Shot ${shot.shot_number}: character ${charId} (${char.name}) is in continuity but name does not appear in Veo prompt — possible Bible-injection failure`,
+          `Shot ${shot.shot_number}: character ${charId} (${char.name}) is in continuity but name does not appear in key_frame_prompt — possible Bible-injection failure`,
         );
       }
     }
@@ -411,12 +412,12 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
 // ============================================================================
 
 function makeUsage(
-  response: Anthropic.Messages.Message,
+  response: { usage: { input_tokens: number; output_tokens: number } },
   startTime: number,
 ): ParseResult['usage'] {
   const inputTokens = response.usage.input_tokens;
   const outputTokens = response.usage.output_tokens;
-  // Sonnet 4.5 pricing as of April 2026: $3/M input, $15/M output
+  // Sonnet 4.6 pricing: $3/M input, $15/M output
   const cost = (inputTokens * 3 + outputTokens * 15) / 1_000_000;
   return {
     input_tokens: inputTokens,
@@ -429,7 +430,7 @@ function makeUsage(
 function failResult(
   errorMessage: string,
   startTime: number,
-  response?: Anthropic.Messages.Message,
+  response?: { usage: { input_tokens: number; output_tokens: number } },
 ): ParseResult {
   return {
     success: false,
