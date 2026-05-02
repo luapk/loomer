@@ -80,8 +80,8 @@ export async function parseStoryboard(
     return failResult('ANTHROPIC_API_KEY not set', startTime);
   }
 
-  const model = options.model ?? 'claude-sonnet-4-5-20250929';
-  const maxTokens = options.maxTokens ?? 32000;
+  const model = options.model ?? 'claude-sonnet-4-6';
+  const maxTokens = options.maxTokens ?? 16000;
   const verbose = options.verbose ?? false;
 
   const client = new Anthropic({ apiKey });
@@ -100,12 +100,14 @@ export async function parseStoryboard(
     console.log(`[parser] Calling ${model} with ${markdown.length} chars of markdown`);
   }
 
-  let response: Anthropic.Messages.Message;
+  // Use the prompt-caching beta so the parser system prompt is cached server-side.
+  // The parser system prompt is ~2k tokens; caching saves re-encoding on every call.
+  let response: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage;
   try {
-    response = await client.messages.create({
+    response = await client.beta.promptCaching.messages.create({
       model,
       max_tokens: maxTokens,
-      system: PARSER_SYSTEM_PROMPT,
+      system: [{ type: 'text', text: PARSER_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
       tools: [
         {
           name: TOOL_NAME,
@@ -411,12 +413,12 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
 // ============================================================================
 
 function makeUsage(
-  response: Anthropic.Messages.Message,
+  response: { usage: { input_tokens: number; output_tokens: number } },
   startTime: number,
 ): ParseResult['usage'] {
   const inputTokens = response.usage.input_tokens;
   const outputTokens = response.usage.output_tokens;
-  // Sonnet 4.5 pricing as of April 2026: $3/M input, $15/M output
+  // Sonnet 4.6 pricing: $3/M input, $15/M output
   const cost = (inputTokens * 3 + outputTokens * 15) / 1_000_000;
   return {
     input_tokens: inputTokens,
@@ -429,7 +431,7 @@ function makeUsage(
 function failResult(
   errorMessage: string,
   startTime: number,
-  response?: Anthropic.Messages.Message,
+  response?: { usage: { input_tokens: number; output_tokens: number } },
 ): ParseResult {
   return {
     success: false,

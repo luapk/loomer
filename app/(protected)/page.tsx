@@ -8,8 +8,7 @@ import { Loader2, ChevronRight, AlertTriangle, CheckCircle2 } from 'lucide-react
 
 type State =
   | { phase: 'empty' }
-  | { phase: 'generating' }
-  | { phase: 'generated'; id: string; title: string; markdown: string }
+  | { phase: 'generating'; markdown: string }
   | { phase: 'parsing'; id: string; title: string; markdown: string }
   | {
       phase: 'parsed';
@@ -55,7 +54,6 @@ function useProgressMessage(active: boolean, milestones: { ms: number; text: str
     milestones.forEach((m, i) => {
       if (i === 0) return;
       const id = setTimeout(() => setIndex(i), m.ms);
-      // store last timer so we can clear on unmount only (not critical)
       timerRef.current = id;
     });
     return () => {
@@ -74,55 +72,30 @@ export default function HomePage() {
   const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
   const parseMessage = useProgressMessage(state.phase === 'parsing', PARSE_MILESTONES);
 
-  async function generate() {
-    if (!script.trim()) return;
-    setState({ phase: 'generating' });
-
-    const res = await fetch('/api/storyboard', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script }),
-    });
-
-    let data: Record<string, unknown>;
-    try {
-      data = await res.json() as Record<string, unknown>;
-    } catch {
-      setState({ phase: 'error', message: 'Server error — no response body. Check that ANTHROPIC_API_KEY and DATABASE_URL are set in Vercel.' });
-      return;
-    }
-
-    if (!res.ok) {
-      const msg = typeof data['error'] === 'string' ? data['error'] : 'Generation failed.';
-      setState({ phase: 'error', message: msg });
-      return;
-    }
-
-    setState({
-      phase: 'generated',
-      id: data['id'] as string,
-      title: data['title'] as string,
-      markdown: data['markdown'] as string,
-    });
-  }
-
-  async function parse() {
-    if (state.phase !== 'generated') return;
-    const { id, title, markdown } = state;
+  async function doParse(id: string, title: string, markdown: string) {
     setState({ phase: 'parsing', id, title, markdown });
 
-    const res = await fetch(`/api/storyboard/${id}/parse`, { method: 'POST' });
+    let res: Response;
+    try {
+      res = await fetch(`/api/storyboard/${id}/parse`, { method: 'POST' });
+    } catch {
+      setState({ phase: 'error', message: 'Network error during parse.' });
+      return;
+    }
 
     let data: Record<string, unknown>;
     try {
-      data = await res.json() as Record<string, unknown>;
+      data = (await res.json()) as Record<string, unknown>;
     } catch {
-      setState({ phase: 'error', message: 'Server error — no response body.' });
+      setState({ phase: 'error', message: 'Server error — no response body during parse.' });
       return;
     }
 
     if (!res.ok) {
-      setState({ phase: 'error', message: typeof data['error'] === 'string' ? data['error'] : 'Parse failed.' });
+      setState({
+        phase: 'error',
+        message: typeof data['error'] === 'string' ? data['error'] : 'Parse failed.',
+      });
       return;
     }
 
@@ -132,58 +105,124 @@ export default function HomePage() {
       title,
       markdown,
       parsedJson: data['storyboard'],
-      warnings: Array.isArray(data['warnings']) ? data['warnings'] as string[] : [],
+      warnings: Array.isArray(data['warnings']) ? (data['warnings'] as string[]) : [],
     });
   }
+
+  async function generate() {
+    if (!script.trim()) return;
+    setState({ phase: 'generating', markdown: '' });
+
+    let res: Response;
+    try {
+      res = await fetch('/api/storyboard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script }),
+      });
+    } catch {
+      setState({ phase: 'error', message: 'Network error — could not reach server.' });
+      return;
+    }
+
+    if (!res.body) {
+      setState({ phase: 'error', message: 'Server returned no response body.' });
+      return;
+    }
+
+    // Non-2xx before stream starts means a JSON error response (e.g. 503 MISSING_API_KEY)
+    if (!res.ok) {
+      let data: Record<string, unknown> = {};
+      try { data = (await res.json()) as Record<string, unknown>; } catch { /* ignore */ }
+      setState({
+        phase: 'error',
+        message:
+          typeof data['error'] === 'string'
+            ? data['error']
+            : 'Server error — no response body. Check that ANTHROPIC_API_KEY and DATABASE_URL are set in Vercel.',
+      });
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          if (!part.startsWith('data: ')) continue;
+          const payload = JSON.parse(part.slice(6)) as Record<string, unknown>;
+
+          if (payload['type'] === 'chunk') {
+            const text = payload['text'] as string;
+            setState((prev) =>
+              prev.phase === 'generating'
+                ? { phase: 'generating', markdown: prev.markdown + text }
+                : prev,
+            );
+          } else if (payload['type'] === 'done') {
+            const { id, title, markdown } = payload as {
+              id: string;
+              title: string;
+              markdown: string;
+              type: string;
+            };
+            await doParse(id, title, markdown);
+            return;
+          } else if (payload['type'] === 'error') {
+            setState({
+              phase: 'error',
+              message: (payload['message'] as string | undefined) ?? 'Generation failed.',
+            });
+            return;
+          }
+        }
+      }
+    } catch {
+      setState({ phase: 'error', message: 'Lost connection to server mid-generation.' });
+    }
+  }
+
+  const isGenerating = state.phase === 'generating';
+  const isParsing = state.phase === 'parsing';
+  const isWorking = isGenerating || isParsing;
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-12 space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">
-          New storyboard
-        </h1>
+        <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">New storyboard</h1>
         <p className="mt-1 text-stone-500 text-sm">
           Paste a script, premise, or beat list. The storyboard skill handles the rest.
         </p>
       </div>
 
-      {/* Input card */}
-      {(state.phase === 'empty' || state.phase === 'generating') && (
+      {/* Input card — visible only when idle */}
+      {state.phase === 'empty' && (
         <div className="glass rounded-2xl p-6 space-y-4">
           <Textarea
             placeholder="INT. PIER - LATE AFTERNOON&#10;&#10;Leo, 8, stands at the rail with his crimson kite..."
             value={script}
             onChange={(e) => setScript(e.target.value)}
             className="min-h-[280px] font-mono text-xs"
-            disabled={state.phase === 'generating'}
           />
           <div className="flex items-center justify-between">
-            {state.phase === 'generating' ? (
-              <span className="text-xs text-stone-500 flex items-center gap-2">
-                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-                {generateMessage}
-              </span>
-            ) : (
-              <span className="text-xs text-stone-400">
-                {script.length > 0 ? `${script.length} chars` : 'Tip: include the word "storyboard" if the skill doesn\'t trigger'}
-              </span>
-            )}
-            <Button
-              onClick={() => { void generate(); }}
-              disabled={state.phase === 'generating' || !script.trim()}
-            >
-              {state.phase === 'generating' ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Generating…
-                </>
-              ) : (
-                <>
-                  Generate storyboard
-                  <ChevronRight className="h-4 w-4" />
-                </>
-              )}
+            <span className="text-xs text-stone-400">
+              {script.length > 0
+                ? `${script.length} chars`
+                : 'Tip: include the word "storyboard" if the skill doesn\'t trigger'}
+            </span>
+            <Button onClick={() => { void generate(); }} disabled={!script.trim()}>
+              Generate storyboard
+              <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -203,86 +242,102 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Generated — show markdown, offer Parse */}
-      {(state.phase === 'generated' || state.phase === 'parsing') && (
+      {/* Streaming / parsing / parsed — the live markdown card */}
+      {(isGenerating || isParsing || state.phase === 'parsed') && (
         <div className="space-y-4">
           <div className="glass rounded-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-semibold text-stone-900">{state.title}</h2>
-                <p className="text-xs text-stone-500 mt-0.5 font-mono">ID: {state.id}</p>
-              </div>
-              <Button
-                onClick={() => { void parse(); }}
-                disabled={state.phase === 'parsing'}
-              >
-                {state.phase === 'parsing' ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Parsing…
-                  </>
-                ) : (
-                  <>
-                    Parse storyboard
-                    <ChevronRight className="h-4 w-4" />
-                  </>
+            {/* Header row */}
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                {state.phase === 'parsed' && (
+                  <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0" />
                 )}
-              </Button>
+                {isWorking && (
+                  <Loader2 className="h-4 w-4 animate-spin text-stone-400 flex-shrink-0" />
+                )}
+                <div>
+                  {'title' in state && state.title ? (
+                    <h2 className="font-semibold text-stone-900">{state.title}</h2>
+                  ) : (
+                    <h2 className="font-semibold text-stone-400">Generating…</h2>
+                  )}
+                  {'id' in state && (
+                    <p className="text-xs text-stone-500 font-mono mt-0.5">ID: {state.id}</p>
+                  )}
+                </div>
+              </div>
+
+              {state.phase === 'parsed' && (
+                <div className="flex items-center gap-2">
+                  {state.warnings.length > 0 && (
+                    <Badge variant="warning">{state.warnings.length} warnings</Badge>
+                  )}
+                  <Badge variant="success">Parsed</Badge>
+                </div>
+              )}
             </div>
 
-            {state.phase === 'parsing' && (
+            {/* Progress messages */}
+            {isGenerating && (
+              <p className="text-xs text-stone-500 flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                {generateMessage}
+              </p>
+            )}
+            {isParsing && (
               <p className="text-xs text-stone-500 flex items-center gap-2">
                 <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
                 {parseMessage}
               </p>
             )}
 
-            <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed border border-stone-100">
-              {state.markdown}
-            </pre>
-          </div>
-        </div>
-      )}
+            {/* Streaming markdown — visible while generating and stays for parsed */}
+            {(isGenerating || isParsing || state.phase === 'parsed') &&
+              'markdown' in state &&
+              state.markdown && (
+                <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed border border-stone-100">
+                  {state.markdown}
+                  {isGenerating && (
+                    <span className="inline-block w-1.5 h-3 bg-stone-400 animate-pulse ml-0.5 align-middle" />
+                  )}
+                </pre>
+              )}
 
-      {/* Parsed — show JSON */}
-      {state.phase === 'parsed' && (
-        <div className="space-y-4">
-          <div className="glass rounded-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-                <div>
-                  <h2 className="font-semibold text-stone-900">{state.title}</h2>
-                  <p className="text-xs text-stone-500 font-mono mt-0.5">ID: {state.id}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {state.warnings.length > 0 && (
-                  <Badge variant="warning">{state.warnings.length} warnings</Badge>
-                )}
-                <Badge variant="success">Parsed</Badge>
-              </div>
-            </div>
-
-            {state.warnings.length > 0 && (
+            {/* Parse warnings */}
+            {state.phase === 'parsed' && state.warnings.length > 0 && (
               <div className="bg-amber-50/60 border border-amber-200/60 rounded-xl p-4 space-y-1">
-                <p className="text-xs font-medium text-amber-700 mb-2">Integrity warnings — review before generating:</p>
+                <p className="text-xs font-medium text-amber-700 mb-2">
+                  Integrity warnings — review before generating:
+                </p>
                 {state.warnings.map((w, i) => (
-                  <p key={i} className="text-xs text-amber-600 font-mono">• {w}</p>
+                  <p key={i} className="text-xs text-amber-600 font-mono">
+                    • {w}
+                  </p>
                 ))}
               </div>
             )}
 
-            <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[600px] whitespace-pre leading-relaxed border border-stone-100">
-              {JSON.stringify(state.parsedJson, null, 2)}
-            </pre>
+            {/* Parsed JSON */}
+            {state.phase === 'parsed' && (
+              <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[600px] whitespace-pre leading-relaxed border border-stone-100">
+                {JSON.stringify(state.parsedJson, null, 2)}
+              </pre>
+            )}
           </div>
 
-          <div className="flex gap-3">
-            <Button variant="secondary" onClick={() => { setState({ phase: 'empty' }); setScript(''); }}>
-              New storyboard
-            </Button>
-          </div>
+          {state.phase === 'parsed' && (
+            <div className="flex gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setState({ phase: 'empty' });
+                  setScript('');
+                }}
+              >
+                New storyboard
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>
