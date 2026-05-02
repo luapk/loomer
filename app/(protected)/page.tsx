@@ -4,7 +4,10 @@ import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/src/components/ui/button';
 import { Textarea } from '@/src/components/ui/textarea';
 import { Badge } from '@/src/components/ui/badge';
-import { Loader2, ChevronRight, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Loader2, ChevronRight, AlertTriangle, CheckCircle2, Camera, Paintbrush, ChevronDown } from 'lucide-react';
+import type { ImageModel } from '@/app/api/google-models/route';
+
+type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
 
 type State =
   | { phase: 'empty' }
@@ -69,8 +72,47 @@ export default function HomePage() {
   const [script, setScript] = useState('');
   const [state, setState] = useState<State>({ phase: 'empty' });
 
+  // Generation settings — shown after parse
+  const [renderStyle, setRenderStyle] = useState<RenderStyle>('PHOTOREAL');
+  const [imageModel, setImageModel] = useState<string>('imagen-3.0-generate-002');
+  const [availableModels, setAvailableModels] = useState<ImageModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+
   const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
   const parseMessage = useProgressMessage(state.phase === 'parsing', PARSE_MILESTONES);
+
+  // Fetch available Google image models when parse completes
+  useEffect(() => {
+    if (state.phase !== 'parsed') return;
+    setModelsLoading(true);
+    setSettingsSaved(false);
+    fetch('/api/google-models')
+      .then((r) => r.json())
+      .then((data: { models: ImageModel[] }) => {
+        setAvailableModels(data.models ?? []);
+        if (data.models?.[0]) setImageModel(data.models[0].id);
+      })
+      .catch(() => {})
+      .finally(() => setModelsLoading(false));
+  }, [state.phase]);
+
+  async function saveSettings(id: string) {
+    setSettingsSaving(true);
+    try {
+      await fetch(`/api/storyboard/${id}/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ render_style: renderStyle, image_model: imageModel }),
+      });
+      setSettingsSaved(true);
+    } catch {
+      // non-fatal — settings can be re-saved
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
 
   async function doParse(id: string, title: string, markdown: string) {
     setState({ phase: 'parsing', id, title, markdown, charsGenerated: 0 });
@@ -161,7 +203,6 @@ export default function HomePage() {
       return;
     }
 
-    // Non-2xx before stream starts means a JSON error response (e.g. 503 MISSING_API_KEY)
     if (!res.ok) {
       let data: Record<string, unknown> = {};
       try { data = (await res.json()) as Record<string, unknown>; } catch { /* ignore */ }
@@ -327,7 +368,7 @@ export default function HomePage() {
               </p>
             )}
 
-            {/* Streaming markdown — visible while generating and stays for parsed */}
+            {/* Streaming markdown */}
             {(isGenerating || isParsing || state.phase === 'parsed') &&
               'markdown' in state &&
               state.markdown && (
@@ -361,17 +402,107 @@ export default function HomePage() {
             )}
           </div>
 
+          {/* Generation settings — shown after parse */}
           {state.phase === 'parsed' && (
-            <div className="flex gap-3">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setState({ phase: 'empty' });
-                  setScript('');
-                }}
-              >
-                New storyboard
-              </Button>
+            <div className="glass rounded-2xl p-6 space-y-5">
+              <div>
+                <h3 className="font-semibold text-stone-900 text-sm">Generation settings</h3>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  Choose how your reference stills and key frames will look.
+                </p>
+              </div>
+
+              {/* Style picker */}
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-stone-600">Visual style</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setRenderStyle('PHOTOREAL')}
+                    className={`rounded-xl border p-4 text-left transition-all ${
+                      renderStyle === 'PHOTOREAL'
+                        ? 'border-stone-900 bg-stone-900 text-white'
+                        : 'border-stone-200 hover:border-stone-300 bg-white'
+                    }`}
+                  >
+                    <Camera className={`h-4 w-4 mb-2 ${renderStyle === 'PHOTOREAL' ? 'text-white' : 'text-stone-500'}`} />
+                    <p className={`text-xs font-medium ${renderStyle === 'PHOTOREAL' ? 'text-white' : 'text-stone-900'}`}>
+                      Photoreal
+                    </p>
+                    <p className={`text-xs mt-0.5 ${renderStyle === 'PHOTOREAL' ? 'text-stone-300' : 'text-stone-400'}`}>
+                      Matches your DP & film stock
+                    </p>
+                  </button>
+
+                  <button
+                    onClick={() => setRenderStyle('WATERCOLOUR_SKETCH')}
+                    className={`rounded-xl border p-4 text-left transition-all ${
+                      renderStyle === 'WATERCOLOUR_SKETCH'
+                        ? 'border-stone-900 bg-stone-900 text-white'
+                        : 'border-stone-200 hover:border-stone-300 bg-white'
+                    }`}
+                  >
+                    <Paintbrush className={`h-4 w-4 mb-2 ${renderStyle === 'WATERCOLOUR_SKETCH' ? 'text-white' : 'text-stone-500'}`} />
+                    <p className={`text-xs font-medium ${renderStyle === 'WATERCOLOUR_SKETCH' ? 'text-white' : 'text-stone-900'}`}>
+                      Watercolour sketch
+                    </p>
+                    <p className={`text-xs mt-0.5 ${renderStyle === 'WATERCOLOUR_SKETCH' ? 'text-stone-300' : 'text-stone-400'}`}>
+                      Pencil lines, muted watercolour wash
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Model picker */}
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-stone-600">Image model</p>
+                {modelsLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-stone-400">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Checking available models…
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <select
+                      value={imageModel}
+                      onChange={(e) => setImageModel(e.target.value)}
+                      className="w-full appearance-none rounded-lg border border-stone-200 bg-white px-3 py-2 pr-8 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-900/20"
+                    >
+                      {availableModels.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label} — {m.description}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-stone-400" />
+                  </div>
+                )}
+              </div>
+
+              {/* Save button */}
+              <div className="flex items-center justify-between pt-1">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setState({ phase: 'empty' });
+                    setScript('');
+                  }}
+                >
+                  New storyboard
+                </Button>
+                <Button
+                  onClick={() => { void saveSettings(state.id); }}
+                  disabled={settingsSaving || modelsLoading}
+                >
+                  {settingsSaving ? (
+                    <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</>
+                  ) : settingsSaved ? (
+                    <><CheckCircle2 className="h-3 w-3" /> Settings saved</>
+                  ) : (
+                    <>Save settings<ChevronRight className="h-4 w-4" /></>
+                  )}
+                </Button>
+              </div>
             </div>
           )}
         </div>
