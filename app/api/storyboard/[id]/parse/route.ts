@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 import { getDb } from '@/src/lib/db';
 import { parseStoryboard } from '@/src/pipeline/02-parse';
 

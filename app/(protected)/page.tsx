@@ -23,12 +23,15 @@ type State =
   | { phase: 'error'; message: string };
 
 const GENERATE_MILESTONES: { ms: number; text: string }[] = [
-  { ms: 0,     text: 'Reading your script…' },
-  { ms: 4000,  text: 'Breaking down scenes and story structure…' },
-  { ms: 10000, text: 'Establishing characters, locations and props…' },
-  { ms: 18000, text: 'Designing shot sequences and coverage…' },
-  { ms: 28000, text: 'Writing camera direction and lens choices…' },
-  { ms: 42000, text: 'Assembling the storyboard…' },
+  { ms: 0,      text: 'Reading your script…' },
+  { ms: 4000,   text: 'Breaking down scenes and story structure…' },
+  { ms: 10000,  text: 'Establishing characters, locations and props…' },
+  { ms: 18000,  text: 'Designing shot sequences and coverage…' },
+  { ms: 28000,  text: 'Writing camera direction and lens choices…' },
+  { ms: 42000,  text: 'Assembling the storyboard…' },
+  { ms: 60000,  text: 'Refining continuity across scenes…' },
+  { ms: 80000,  text: 'Checking visual consistency…' },
+  { ms: 105000, text: 'Locking the shot list…' },
 ];
 
 const PARSE_MILESTONES: { ms: number; text: string }[] = [

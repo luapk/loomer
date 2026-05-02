@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { getDb } from '@/src/lib/db';
