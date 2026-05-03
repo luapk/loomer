@@ -70,12 +70,12 @@ export async function POST(
       aspectRatio: '16:9' as const,
     })),
     ...parsed.props
-      .filter((p) => p.generates_reference_still)
+      .filter((p) => p.generates_reference_still && p.reference_still_prompt)
       .map((p) => ({
         id: p.id,
         name: p.name,
         type: 'prop' as const,
-        reference_still_prompt: p.reference_still_prompt,
+        reference_still_prompt: p.reference_still_prompt!,
         aspectRatio: '1:1' as const,
       })),
   ];

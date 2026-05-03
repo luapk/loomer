@@ -168,8 +168,9 @@ export const PropSchema = z.object({
     .describe('The full Bible entry, paste-ready. Approximately 40-150 words.'),
   reference_still_prompt: z
     .string()
+    .nullable()
     .describe(
-      'A reformulation for the canonical prop reference still. Object centred on neutral plain background, even lighting, full visibility. Approximately 30-80 words.',
+      'A reformulation for the canonical prop reference still. Object centred on neutral plain background, even lighting, full visibility. Approximately 30-80 words. null if generates_reference_still is false.',
     ),
   state_transitions: z
     .string()
