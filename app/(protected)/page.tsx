@@ -302,6 +302,7 @@ export default function HomePage() {
   async function generate() {
     if (!script.trim()) return;
     setState({ phase: 'generating', markdown: '' });
+    setActiveTab('storyboard');
 
     let res: Response;
     try {
@@ -393,12 +394,12 @@ export default function HomePage() {
     { id: 'storyboard' as Tab, label: 'Storyboard', enabled: hasStoryboard },
     {
       id: 'shots' as Tab,
-      label: isLoaded ? `Shots (${(state as { parsedJson: { shots?: unknown[] } }).parsedJson?.shots?.length ?? 0})` : 'Shots',
+      label: isLoaded ? `Shot list (${(state as { parsedJson: { shots?: unknown[] } }).parsedJson?.shots?.length ?? 0})` : 'Shot list',
       enabled: hasShots,
     },
     {
       id: 'images' as Tab,
-      label: totalEntities > 0 ? `Images ${approvedCount}/${totalEntities}` : 'Images',
+      label: totalEntities > 0 ? `Stills ${approvedCount}/${totalEntities}` : 'Stills',
       enabled: hasImages,
       spinner: state.phase === 'generating_refs',
     },
@@ -597,12 +598,10 @@ export default function HomePage() {
                 <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
                 {generateMessage}
               </p>
-              {'markdown' in state && state.markdown && (
-                <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[400px] whitespace-pre-wrap leading-relaxed border border-stone-100">
-                  {state.markdown}
-                  <span className="inline-block w-1.5 h-3 bg-stone-400 animate-pulse ml-0.5 align-middle" />
-                </pre>
-              )}
+              <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed border border-stone-100">
+                {'markdown' in state ? state.markdown : ''}
+                <span className="inline-block w-1.5 h-3 bg-stone-400 animate-pulse ml-0.5 align-middle" />
+              </pre>
             </div>
           )}
 
