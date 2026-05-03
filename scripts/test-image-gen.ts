@@ -9,6 +9,10 @@
 
 import { GoogleGenAI, Modality } from '@google/genai';
 import { writeFileSync } from 'fs';
+import { config } from 'dotenv';
+
+// Load .env so GOOGLE_AI_API_KEY doesn't need to be passed on the command line.
+config({ path: new URL('../.env', import.meta.url).pathname });
 
 const apiKey = process.env.GOOGLE_AI_API_KEY;
 if (!apiKey) {
