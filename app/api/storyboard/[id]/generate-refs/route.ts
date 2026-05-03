@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
@@ -21,13 +21,32 @@ function buildPrompt(
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `${base}\n\nStyle: ${WATERCOLOUR_STYLE}`;
   }
-  // Photoreal — inject style lock
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
   return `${base}\n\nStyle: ${styleParts.join(' ')}`;
+}
+
+// Generate one image via generateContent (works with Gemini Developer API keys).
+// Returns base64 bytes + mime type, or null if no image part in response.
+async function generateOneImage(
+  ai: GoogleGenAI,
+  model: string,
+  prompt: string,
+): Promise<{ data: string; mimeType: string } | null> {
+  const response = await ai.models.generateContent({
+    model,
+    contents: prompt,
+    config: { responseModalities: [Modality.IMAGE] },
+  });
+  for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+    if (part.inlineData?.data) {
+      return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
+    }
+  }
+  return null;
 }
 
 export async function POST(
@@ -50,40 +69,29 @@ export async function POST(
   }
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
-  const model = storyboard.image_model ?? 'imagen-3.0-generate-002';
+  const model = storyboard.image_model ?? 'gemini-2.0-flash-preview-image-generation';
   const renderStyle = storyboard.render_style;
 
-  // Collect all entities that need reference stills
   const entities: RefEntity[] = [
     ...parsed.characters.map((c) => ({
-      id: c.id,
-      name: c.name,
-      type: 'character' as const,
-      reference_still_prompt: c.reference_still_prompt,
-      aspectRatio: '3:4' as const,
+      id: c.id, name: c.name, type: 'character' as const,
+      reference_still_prompt: c.reference_still_prompt, aspectRatio: '3:4' as const,
     })),
     ...parsed.locations.map((l) => ({
-      id: l.id,
-      name: l.name,
-      type: 'location' as const,
-      reference_still_prompt: l.reference_still_prompt,
-      aspectRatio: '16:9' as const,
+      id: l.id, name: l.name, type: 'location' as const,
+      reference_still_prompt: l.reference_still_prompt, aspectRatio: '16:9' as const,
     })),
     ...parsed.props
       .filter((p) => p.generates_reference_still && p.reference_still_prompt)
       .map((p) => ({
-        id: p.id,
-        name: p.name,
-        type: 'prop' as const,
-        reference_still_prompt: p.reference_still_prompt!,
-        aspectRatio: '1:1' as const,
+        id: p.id, name: p.name, type: 'prop' as const,
+        reference_still_prompt: p.reference_still_prompt!, aspectRatio: '1:1' as const,
       })),
   ];
 
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
 
-  // Initialise reference_stills with 'pending' for every entity
   const refStills: ReferenceStills = {};
   for (const entity of entities) {
     refStills[entity.id] = { status: 'pending', candidates: [], selected: null };
@@ -109,6 +117,7 @@ export async function POST(
           const entity = entities[i];
           if (!entity) continue;
 
+          const entityStart = Date.now();
           send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entities.length });
 
           refStills[entity.id] = { status: 'generating', candidates: [], selected: null };
@@ -116,38 +125,37 @@ export async function POST(
 
           try {
             const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
-            const response = await ai.models.generateImages({
-              model,
-              prompt,
-              config: { numberOfImages: 4, aspectRatio: entity.aspectRatio },
-            });
 
-            const candidates: string[] = [];
-            const images = response.generatedImages ?? [];
+            // Generate 4 candidates in parallel — one generateContent call each
+            const results = await Promise.allSettled(
+              Array.from({ length: 4 }, (_, j) =>
+                generateOneImage(ai, model, prompt).then(async (img) => {
+                  if (!img) return null;
+                  const buffer = Buffer.from(img.data, 'base64');
+                  const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                  const blob = await put(
+                    `${id}/refs/${entity.id}/${j}.${ext}`,
+                    buffer,
+                    { access: 'public', contentType: img.mimeType },
+                  );
+                  return blob.url;
+                }),
+              ),
+            );
 
-            for (let j = 0; j < images.length; j++) {
-              const img = images[j];
-              const bytes = img?.image?.imageBytes;
-              if (!bytes) continue;
-
-              const buffer = Buffer.from(bytes, 'base64');
-              const blob = await put(
-                `${id}/refs/${entity.id}/${j}.png`,
-                buffer,
-                { access: 'public', contentType: 'image/png' },
-              );
-              candidates.push(blob.url);
-            }
+            const candidates = results
+              .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && r.value !== null)
+              .map((r) => r.value);
 
             refStills[entity.id] = { status: 'done', candidates, selected: null };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
 
-            send({ type: 'entity_done', entityId: entity.id, candidates });
+            send({ type: 'entity_done', entityId: entity.id, candidates, durationMs: Date.now() - entityStart });
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             refStills[entity.id] = { status: 'error', candidates: [], selected: null, error: message };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
-            send({ type: 'entity_error', entityId: entity.id, message });
+            send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
           }
         }
 

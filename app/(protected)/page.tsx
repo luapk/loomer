@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
+import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
+import type { DevStats } from '@/src/components/dev-stats';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
 type Tab = 'storyboard' | 'shots' | 'images' | 'json';
@@ -78,13 +80,16 @@ export default function HomePage() {
   const [state, setState] = useState<State>({ phase: 'empty' });
 
   const [renderStyle, setRenderStyle] = useState<RenderStyle>('PHOTOREAL');
-  const [imageModel, setImageModel] = useState<string>('imagen-3.0-generate-001');
+  const [imageModel, setImageModel] = useState<string>('gemini-2.0-flash-preview-image-generation');
   const [availableModels, setAvailableModels] = useState<ImageModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
   // Reference stills — separate from main state so they survive phase transitions
   const [refStills, setRefStills] = useState<ReferenceStills>({});
   const [refsCurrentEntity, setRefsCurrentEntity] = useState<string | null>(null);
+
+  // Dev timing stats
+  const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
 
   const [activeTab, setActiveTab] = useState<Tab>('storyboard');
 
@@ -139,6 +144,7 @@ export default function HomePage() {
     setRefStills({});
     setRefsCurrentEntity(null);
     setActiveTab('images');
+    setDevStats((prev) => ({ ...prev, refsStart: Date.now(), refsEnd: undefined, entities: [] }));
 
     let res: Response;
     try {
@@ -181,28 +187,49 @@ export default function HomePage() {
 
           if (payload['type'] === 'entity_start') {
             const entityId = payload['entityId'] as string;
+            const entityName = payload['entityName'] as string;
+            const entityType = payload['entityType'] as string;
             setRefsCurrentEntity(entityId);
             setRefStills((prev) => ({
               ...prev,
               [entityId]: { status: 'generating', candidates: [], selected: null },
             }));
+            setDevStats((prev) => ({
+              ...prev,
+              entities: [...prev.entities, { id: entityId, name: entityName, type: entityType, startMs: Date.now() }],
+            }));
           } else if (payload['type'] === 'entity_done') {
             const entityId = payload['entityId'] as string;
             const candidates = payload['candidates'] as string[];
+            const durationMs = payload['durationMs'] as number | undefined;
             setRefsCurrentEntity(null);
             setRefStills((prev) => ({
               ...prev,
               [entityId]: { status: 'done', candidates, selected: null },
             }));
+            setDevStats((prev) => ({
+              ...prev,
+              entities: prev.entities.map((e) =>
+                e.id === entityId ? { ...e, durationMs, candidateCount: candidates.length } : e,
+              ),
+            }));
           } else if (payload['type'] === 'entity_error') {
             const entityId = payload['entityId'] as string;
             const message = payload['message'] as string;
+            const durationMs = payload['durationMs'] as number | undefined;
             setRefsCurrentEntity(null);
             setRefStills((prev) => ({
               ...prev,
               [entityId]: { status: 'error', candidates: [], selected: null, error: message },
             }));
+            setDevStats((prev) => ({
+              ...prev,
+              entities: prev.entities.map((e) =>
+                e.id === entityId ? { ...e, durationMs, error: message } : e,
+              ),
+            }));
           } else if (payload['type'] === 'done') {
+            setDevStats((prev) => ({ ...prev, refsEnd: Date.now() }));
             setState((prev) =>
               prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
             );
@@ -267,6 +294,13 @@ export default function HomePage() {
               prev.phase === 'parsing' ? { ...prev, charsGenerated: chars } : prev,
             );
           } else if (payload['type'] === 'done') {
+            const usage = payload['usage'] as { input_tokens?: number; output_tokens?: number } | undefined;
+            setDevStats((prev) => ({
+              ...prev,
+              parseEnd: Date.now(),
+              parseInputTokens: usage?.input_tokens,
+              parseOutputTokens: usage?.output_tokens,
+            }));
             setState({
               phase: 'parsed',
               id,
@@ -303,6 +337,8 @@ export default function HomePage() {
     if (!script.trim()) return;
     setState({ phase: 'generating', markdown: '' });
     setActiveTab('storyboard');
+    const genStart = Date.now();
+    setDevStats({ ...EMPTY_DEV_STATS, generateStart: genStart });
 
     let res: Response;
     try {
@@ -362,6 +398,7 @@ export default function HomePage() {
             const { id, title, markdown } = payload as {
               id: string; title: string; markdown: string; type: string;
             };
+            setDevStats((prev) => ({ ...prev, generateEnd: Date.now(), parseStart: Date.now() }));
             await doParse(id, title, markdown);
             return;
           } else if (payload['type'] === 'error') {
@@ -714,6 +751,8 @@ export default function HomePage() {
           {JSON.stringify(state.parsedJson, null, 2)}
         </pre>
       )}
+
+      <DevStatsPanel stats={devStats} />
     </div>
   );
 }
