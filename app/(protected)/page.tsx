@@ -78,7 +78,7 @@ export default function HomePage() {
   const [state, setState] = useState<State>({ phase: 'empty' });
 
   const [renderStyle, setRenderStyle] = useState<RenderStyle>('PHOTOREAL');
-  const [imageModel, setImageModel] = useState<string>('imagen-3.0-generate-002');
+  const [imageModel, setImageModel] = useState<string>('imagen-3.0-generate-001');
   const [availableModels, setAvailableModels] = useState<ImageModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -383,274 +383,248 @@ export default function HomePage() {
   const approvedCount = Object.values(refStills).filter((s) => s.selected !== null).length;
   const totalEntities = Object.keys(refStills).length;
 
+  // Which tabs have content yet
+  const hasStoryboard = state.phase !== 'empty' && state.phase !== 'error';
+  const hasShots = isLoaded;
+  const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done';
+  const hasJson = isLoaded;
+
+  const tabDefs = [
+    { id: 'storyboard' as Tab, label: 'Storyboard', enabled: hasStoryboard },
+    {
+      id: 'shots' as Tab,
+      label: isLoaded ? `Shots (${(state as { parsedJson: { shots?: unknown[] } }).parsedJson?.shots?.length ?? 0})` : 'Shots',
+      enabled: hasShots,
+    },
+    {
+      id: 'images' as Tab,
+      label: totalEntities > 0 ? `Images ${approvedCount}/${totalEntities}` : 'Images',
+      enabled: hasImages,
+      spinner: state.phase === 'generating_refs',
+    },
+    { id: 'json' as Tab, label: 'JSON', enabled: hasJson },
+  ];
+
   return (
-    <div className="max-w-3xl mx-auto px-6 py-12 space-y-8">
+    <div className="max-w-3xl mx-auto px-6 py-12 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">
-          {isLoaded && 'title' in state ? state.title : 'New storyboard'}
-        </h1>
-        {!isLoaded && (
-          <p className="mt-1 text-stone-500 text-sm">
-            Paste a script, premise, or beat list. The storyboard skill handles the rest.
-          </p>
-        )}
-        {isLoaded && 'id' in state && (
-          <p className="text-xs text-stone-400 font-mono mt-1">ID: {state.id}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">
+            {isLoaded && 'title' in state ? state.title
+              : (isGenerating || isParsing) && 'title' in state && state.title ? state.title
+              : 'New storyboard'}
+          </h1>
+          {state.phase === 'empty' && (
+            <p className="mt-1 text-stone-500 text-sm">
+              Paste a script, premise, or beat list. The storyboard skill handles the rest.
+            </p>
+          )}
+          {'id' in state && (
+            <p className="text-xs text-stone-400 font-mono mt-1">ID: {state.id}</p>
+          )}
+        </div>
+        {isLoaded && 'warnings' in state && (
+          <div className="flex items-center gap-2 flex-shrink-0 pt-1">
+            {state.warnings.length > 0 && (
+              <Badge variant="warning">{state.warnings.length} warnings</Badge>
+            )}
+            <Badge variant="success">Parsed</Badge>
+          </div>
         )}
       </div>
 
-      {/* Input card */}
-      {state.phase === 'empty' && (
-        <div className="glass rounded-2xl p-6 space-y-4">
-          <Textarea
-            placeholder="INT. PIER - LATE AFTERNOON&#10;&#10;Leo, 8, stands at the rail with his crimson kite..."
-            value={script}
-            onChange={(e) => setScript(e.target.value)}
-            className="min-h-[280px] font-mono text-xs"
-          />
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-stone-400">
-              {script.length > 0
-                ? `${script.length} chars`
-                : "Tip: include the word \"storyboard\" if the skill doesn't trigger"}
-            </span>
-            <Button onClick={() => { void generate(); }} disabled={!script.trim()}>
-              Generate storyboard
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      )}
+      {/* ── Tab bar — always visible ── */}
+      <div className="flex gap-1 border-b border-stone-200">
+        {tabDefs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => tab.enabled && setActiveTab(tab.id)}
+            aria-disabled={!tab.enabled}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-colors relative select-none ${
+              !tab.enabled
+                ? 'text-stone-300 cursor-not-allowed'
+                : activeTab === tab.id
+                  ? 'text-stone-900 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-stone-900'
+                  : 'text-stone-500 hover:text-stone-700 cursor-pointer'
+            }`}
+          >
+            {'spinner' in tab && tab.spinner && (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            )}
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      {/* Error */}
-      {state.phase === 'error' && (
-        <div className="glass rounded-2xl p-6 border-red-200/60 bg-red-50/40 space-y-3">
-          <div className="flex items-center gap-2 text-red-700">
-            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-            <span className="font-medium text-sm">Something went wrong</span>
+      {/* ── Settings panel — only when storyboard is loaded ── */}
+      {isLoaded && 'parsedJson' in state && (
+        <div className="glass rounded-2xl p-6 space-y-5">
+          <div>
+            <h3 className="font-semibold text-stone-900 text-sm">Generation settings</h3>
+            <p className="text-xs text-stone-500 mt-0.5">
+              Choose how reference stills and key frames will look.
+            </p>
           </div>
-          <p className="text-sm text-red-600 whitespace-pre-wrap">{state.message}</p>
-          <Button variant="secondary" size="sm" onClick={() => setState({ phase: 'empty' })}>
-            Try again
-          </Button>
-        </div>
-      )}
 
-      {/* Generating / parsing progress */}
-      {(isGenerating || isParsing) && (
-        <div className="glass rounded-2xl p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <Loader2 className="h-4 w-4 animate-spin text-stone-400 flex-shrink-0" />
-            {'title' in state && state.title ? (
-              <h2 className="font-semibold text-stone-900">{state.title}</h2>
+          {/* Style picker */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-stone-600">Visual style</p>
+            <div className="grid grid-cols-2 gap-3">
+              {(
+                [
+                  { value: 'PHOTOREAL' as const, icon: Camera, label: 'Photoreal', description: 'Matches your DP & film stock' },
+                  { value: 'WATERCOLOUR_SKETCH' as const, icon: Paintbrush, label: 'Watercolour sketch', description: 'Pencil lines, muted watercolour wash' },
+                ] as const
+              ).map(({ value, icon: Icon, label, description }) => {
+                const active = renderStyle === value;
+                return (
+                  <button
+                    key={value}
+                    onClick={() => setRenderStyle(value)}
+                    disabled={state.phase === 'generating_refs'}
+                    className={`rounded-xl border p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                      active ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 hover:border-stone-300 bg-white'
+                    }`}
+                  >
+                    <Icon className={`h-4 w-4 mb-2 ${active ? 'text-white' : 'text-stone-500'}`} />
+                    <p className={`text-xs font-medium ${active ? 'text-white' : 'text-stone-900'}`}>{label}</p>
+                    <p className={`text-xs mt-0.5 ${active ? 'text-stone-300' : 'text-stone-400'}`}>{description}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Model picker */}
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-stone-600">Image model</p>
+            {modelsLoading ? (
+              <div className="flex items-center gap-2 text-xs text-stone-400">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Checking available models…
+              </div>
             ) : (
-              <h2 className="font-semibold text-stone-400">Generating…</h2>
+              <div className="relative">
+                <select
+                  value={imageModel}
+                  onChange={(e) => setImageModel(e.target.value)}
+                  disabled={state.phase === 'generating_refs'}
+                  className="w-full appearance-none rounded-lg border border-stone-200 bg-white px-3 py-2 pr-8 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label} — {m.description}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-stone-400" />
+              </div>
             )}
           </div>
 
-          {isGenerating && (
-            <p className="text-xs text-stone-500 flex items-center gap-2">
-              <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-              {generateMessage}
-            </p>
-          )}
-          {isParsing && (
-            <p className="text-xs text-stone-500 flex items-center gap-2">
-              <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-              {parseMessage}
-              {state.phase === 'parsing' && state.charsGenerated > 0 && (
-                <span className="text-stone-400">
-                  · {state.charsGenerated.toLocaleString()} chars
-                </span>
-              )}
-            </p>
-          )}
-
-          {isGenerating && 'markdown' in state && state.markdown && (
-            <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[400px] whitespace-pre-wrap leading-relaxed border border-stone-100">
-              {state.markdown}
-              <span className="inline-block w-1.5 h-3 bg-stone-400 animate-pulse ml-0.5 align-middle" />
-            </pre>
-          )}
+          {/* Action row */}
+          <div className="flex items-center justify-between pt-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setActiveTab('storyboard'); }}
+            >
+              New storyboard
+            </Button>
+            {state.phase === 'generating_refs' ? (
+              <div className="flex items-center gap-2 text-xs text-stone-500">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Generating…
+                {refsCurrentEntity && <span className="font-mono text-stone-400">{refsCurrentEntity}</span>}
+              </div>
+            ) : (
+              <Button
+                onClick={() => { void startGeneration(state.id); }}
+                disabled={modelsLoading}
+                variant={state.phase === 'refs_done' ? 'secondary' : 'default'}
+              >
+                {state.phase === 'refs_done' ? 'Regenerate stills' : 'Generate reference stills'}
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Loaded storyboard — settings panel + tabs */}
-      {isLoaded && 'parsedJson' in state && (
+      {/* ── Tab content ── */}
+
+      {/* Storyboard tab */}
+      {activeTab === 'storyboard' && (
         <div className="space-y-4">
-
-          {/* ── Generation settings (always at top) ── */}
-          <div className="glass rounded-2xl p-6 space-y-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-stone-900 text-sm">Generation settings</h3>
-                <p className="text-xs text-stone-500 mt-0.5">
-                  Choose how reference stills and key frames will look.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                {state.warnings.length > 0 && (
-                  <Badge variant="warning">{state.warnings.length} warnings</Badge>
-                )}
-                <Badge variant="success">Parsed</Badge>
-              </div>
-            </div>
-
-            {/* Style picker */}
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-stone-600">Visual style</p>
-              <div className="grid grid-cols-2 gap-3">
-                {(
-                  [
-                    {
-                      value: 'PHOTOREAL' as const,
-                      icon: Camera,
-                      label: 'Photoreal',
-                      description: 'Matches your DP & film stock',
-                    },
-                    {
-                      value: 'WATERCOLOUR_SKETCH' as const,
-                      icon: Paintbrush,
-                      label: 'Watercolour sketch',
-                      description: 'Pencil lines, muted watercolour wash',
-                    },
-                  ] as const
-                ).map(({ value, icon: Icon, label, description }) => {
-                  const active = renderStyle === value;
-                  return (
-                    <button
-                      key={value}
-                      onClick={() => setRenderStyle(value)}
-                      disabled={state.phase === 'generating_refs'}
-                      className={`rounded-xl border p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                        active
-                          ? 'border-stone-900 bg-stone-900 text-white'
-                          : 'border-stone-200 hover:border-stone-300 bg-white'
-                      }`}
-                    >
-                      <Icon className={`h-4 w-4 mb-2 ${active ? 'text-white' : 'text-stone-500'}`} />
-                      <p className={`text-xs font-medium ${active ? 'text-white' : 'text-stone-900'}`}>
-                        {label}
-                      </p>
-                      <p className={`text-xs mt-0.5 ${active ? 'text-stone-300' : 'text-stone-400'}`}>
-                        {description}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Model picker */}
-            <div className="space-y-2">
-              <p className="text-xs font-medium text-stone-600">Image model</p>
-              {modelsLoading ? (
-                <div className="flex items-center gap-2 text-xs text-stone-400">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Checking available models…
-                </div>
-              ) : (
-                <div className="relative">
-                  <select
-                    value={imageModel}
-                    onChange={(e) => setImageModel(e.target.value)}
-                    disabled={state.phase === 'generating_refs'}
-                    className="w-full appearance-none rounded-lg border border-stone-200 bg-white px-3 py-2 pr-8 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label} — {m.description}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-stone-400" />
-                </div>
-              )}
-            </div>
-
-            {/* Action row */}
-            <div className="flex items-center justify-between pt-1">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => {
-                  setState({ phase: 'empty' });
-                  setScript('');
-                  setRefStills({});
-                  setActiveTab('storyboard');
-                }}
-              >
-                New storyboard
-              </Button>
-
-              {state.phase === 'generating_refs' ? (
-                <div className="flex items-center gap-2 text-xs text-stone-500">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Generating…
-                  {refsCurrentEntity && (
-                    <span className="font-mono text-stone-400">{refsCurrentEntity}</span>
-                  )}
-                </div>
-              ) : (
-                <Button
-                  onClick={() => { void startGeneration(state.id); }}
-                  disabled={modelsLoading}
-                  variant={state.phase === 'refs_done' ? 'secondary' : 'default'}
-                >
-                  {state.phase === 'refs_done' ? 'Regenerate stills' : 'Generate reference stills'}
+          {/* Input form — empty state */}
+          {state.phase === 'empty' && (
+            <div className="glass rounded-2xl p-6 space-y-4">
+              <Textarea
+                placeholder="INT. PIER - LATE AFTERNOON&#10;&#10;Leo, 8, stands at the rail with his crimson kite..."
+                value={script}
+                onChange={(e) => setScript(e.target.value)}
+                className="min-h-[280px] font-mono text-xs"
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-stone-400">
+                  {script.length > 0 ? `${script.length} chars` : "Tip: include the word \"storyboard\" if the skill doesn't trigger"}
+                </span>
+                <Button onClick={() => { void generate(); }} disabled={!script.trim()}>
+                  Generate storyboard
                   <ChevronRight className="h-4 w-4" />
                 </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {state.phase === 'error' && (
+            <div className="glass rounded-2xl p-6 border-red-200/60 bg-red-50/40 space-y-3">
+              <div className="flex items-center gap-2 text-red-700">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <span className="font-medium text-sm">Something went wrong</span>
+              </div>
+              <p className="text-sm text-red-600 whitespace-pre-wrap">{state.message}</p>
+              <Button variant="secondary" size="sm" onClick={() => setState({ phase: 'empty' })}>
+                Try again
+              </Button>
+            </div>
+          )}
+
+          {/* Progress — generating */}
+          {isGenerating && (
+            <div className="glass rounded-2xl p-6 space-y-3">
+              <p className="text-xs text-stone-500 flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                {generateMessage}
+              </p>
+              {'markdown' in state && state.markdown && (
+                <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[400px] whitespace-pre-wrap leading-relaxed border border-stone-100">
+                  {state.markdown}
+                  <span className="inline-block w-1.5 h-3 bg-stone-400 animate-pulse ml-0.5 align-middle" />
+                </pre>
               )}
             </div>
-          </div>
+          )}
 
-          {/* ── Tab bar ── */}
-          <div className="flex gap-1 border-b border-stone-200">
-            {(
-              [
-                { id: 'storyboard' as Tab, label: 'Storyboard' },
-                {
-                  id: 'shots' as Tab,
-                  label: `Shots (${(state.parsedJson?.shots?.length ?? 0) as number})`,
-                },
-                {
-                  id: 'images' as Tab,
-                  label: totalEntities > 0
-                    ? `Images ${approvedCount}/${totalEntities}`
-                    : 'Images',
-                  spinner: state.phase === 'generating_refs',
-                },
-                { id: 'json' as Tab, label: 'JSON' },
-              ]
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-colors relative ${
-                  activeTab === tab.id
-                    ? 'text-stone-900 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-stone-900'
-                    : 'text-stone-500 hover:text-stone-700'
-                }`}
-              >
-                {'spinner' in tab && tab.spinner && (
-                  <Loader2 className="h-3 w-3 animate-spin" />
+          {/* Progress — parsing */}
+          {isParsing && (
+            <div className="glass rounded-2xl p-6 space-y-2">
+              <p className="text-xs text-stone-500 flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                {parseMessage}
+                {state.phase === 'parsing' && state.charsGenerated > 0 && (
+                  <span className="text-stone-400">· {state.charsGenerated.toLocaleString()} chars</span>
                 )}
-                {tab.label}
-              </button>
-            ))}
-          </div>
+              </p>
+            </div>
+          )}
 
-          {/* ── Tab content ── */}
-
-          {/* Storyboard */}
-          {activeTab === 'storyboard' && (
+          {/* Loaded — warnings + markdown */}
+          {isLoaded && 'markdown' in state && (
             <div className="space-y-3">
-              {state.warnings.length > 0 && (
+              {'warnings' in state && state.warnings.length > 0 && (
                 <div className="bg-amber-50/60 border border-amber-200/60 rounded-xl p-4 space-y-1">
-                  <p className="text-xs font-medium text-amber-700 mb-2">
-                    Integrity warnings — review before generating:
-                  </p>
+                  <p className="text-xs font-medium text-amber-700 mb-2">Integrity warnings — review before generating:</p>
                   {state.warnings.map((w, i) => (
                     <p key={i} className="text-xs text-amber-600 font-mono">• {w}</p>
                   ))}
@@ -661,112 +635,85 @@ export default function HomePage() {
               </pre>
             </div>
           )}
-
-          {/* Shots */}
-          {activeTab === 'shots' && (
-            <div className="space-y-3">
-              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-              {(state.parsedJson?.shots ?? []).map((shot: any) => (
-                <div key={shot.shot_number as number} className="glass rounded-xl p-4 space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-xs font-mono font-semibold text-stone-400 flex-shrink-0 w-7">
-                        {String(shot.shot_number as number).padStart(2, '0')}
-                      </span>
-                      <span className="text-sm font-medium text-stone-900 truncate">
-                        {shot.descriptor as string}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <Badge variant="outline" className="text-xs">
-                        {shot.grammar?.scale as string}
-                      </Badge>
-                      <Badge variant="outline" className="text-xs">
-                        {shot.grammar?.lens as string}
-                      </Badge>
-                    </div>
-                  </div>
-                  <p className="text-xs text-stone-500 pl-9">{shot.function as string}</p>
-                  {shot.action_beat && (
-                    <p className="text-xs text-stone-600 pl-9 leading-relaxed">
-                      {shot.action_beat as string}
-                    </p>
-                  )}
-                  {(shot.continuity?.characters as string[] | undefined)?.length ? (
-                    <div className="pl-9 flex flex-wrap items-center gap-1.5">
-                      {(shot.continuity.characters as string[]).map((c) => (
-                        <span
-                          key={c}
-                          className="text-xs font-mono text-stone-400 bg-stone-100 rounded px-1.5 py-0.5"
-                        >
-                          {c}
-                        </span>
-                      ))}
-                      <span className="text-xs font-mono text-stone-400 bg-stone-100 rounded px-1.5 py-0.5">
-                        {shot.continuity.location_id as string}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Images */}
-          {activeTab === 'images' && (
-            <div className="space-y-6">
-              {totalEntities === 0 && state.phase !== 'generating_refs' && (
-                <div className="flex flex-col items-center justify-center py-16 text-stone-400 space-y-3">
-                  <ImageIcon className="h-8 w-8" />
-                  <p className="text-sm">No reference stills yet.</p>
-                  <p className="text-xs text-center">
-                    Choose your settings above, then click Generate reference stills.
-                  </p>
-                </div>
-              )}
-
-              <EntitySection
-                title="Characters"
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                entities={(state.parsedJson?.characters ?? []).map((c: any) => ({
-                  id: c.id as string,
-                  name: c.name as string,
-                }))}
-                refStills={refStills}
-                onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
-              />
-              <EntitySection
-                title="Locations"
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                entities={(state.parsedJson?.locations ?? []).map((l: any) => ({
-                  id: l.id as string,
-                  name: l.name as string,
-                }))}
-                refStills={refStills}
-                onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
-              />
-              <EntitySection
-                title="Props"
-                entities={
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  (state.parsedJson?.props ?? []).filter((p: any) => p.generates_reference_still as boolean).map((p: any) => ({
-                    id: p.id as string,
-                    name: p.name as string,
-                  }))
-                }
-                refStills={refStills}
-                onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
-              />
-            </div>
-          )}
-
-          {/* JSON */}
-          {activeTab === 'json' && (
-            <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[700px] whitespace-pre leading-relaxed border border-stone-100">
-              {JSON.stringify(state.parsedJson, null, 2)}
-            </pre>
-          )}
         </div>
+      )}
+
+      {/* Shots tab */}
+      {activeTab === 'shots' && isLoaded && 'parsedJson' in state && (
+        <div className="space-y-3">
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          {(state.parsedJson?.shots ?? []).map((shot: any) => (
+            <div key={shot.shot_number as number} className="glass rounded-xl p-4 space-y-2">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-xs font-mono font-semibold text-stone-400 flex-shrink-0 w-7">
+                    {String(shot.shot_number as number).padStart(2, '0')}
+                  </span>
+                  <span className="text-sm font-medium text-stone-900 truncate">{shot.descriptor as string}</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <Badge variant="outline" className="text-xs">{shot.grammar?.scale as string}</Badge>
+                  <Badge variant="outline" className="text-xs">{shot.grammar?.lens as string}</Badge>
+                </div>
+              </div>
+              <p className="text-xs text-stone-500 pl-9">{shot.function as string}</p>
+              {shot.action_beat && (
+                <p className="text-xs text-stone-600 pl-9 leading-relaxed">{shot.action_beat as string}</p>
+              )}
+              {(shot.continuity?.characters as string[] | undefined)?.length ? (
+                <div className="pl-9 flex flex-wrap items-center gap-1.5">
+                  {(shot.continuity.characters as string[]).map((c) => (
+                    <span key={c} className="text-xs font-mono text-stone-400 bg-stone-100 rounded px-1.5 py-0.5">{c}</span>
+                  ))}
+                  <span className="text-xs font-mono text-stone-400 bg-stone-100 rounded px-1.5 py-0.5">
+                    {shot.continuity.location_id as string}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Images tab */}
+      {activeTab === 'images' && isLoaded && 'parsedJson' in state && (
+        <div className="space-y-6">
+          {totalEntities === 0 && state.phase !== 'generating_refs' && (
+            <div className="flex flex-col items-center justify-center py-16 text-stone-400 space-y-3">
+              <ImageIcon className="h-8 w-8" />
+              <p className="text-sm">No reference stills yet.</p>
+              <p className="text-xs text-center">Choose your settings above, then click Generate reference stills.</p>
+            </div>
+          )}
+          <EntitySection
+            title="Characters"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            entities={(state.parsedJson?.characters ?? []).map((c: any) => ({ id: c.id as string, name: c.name as string }))}
+            refStills={refStills}
+            onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+          />
+          <EntitySection
+            title="Locations"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            entities={(state.parsedJson?.locations ?? []).map((l: any) => ({ id: l.id as string, name: l.name as string }))}
+            refStills={refStills}
+            onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+          />
+          <EntitySection
+            title="Props"
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            entities={(state.parsedJson?.props ?? []).filter((p: any) => p.generates_reference_still as boolean).map((p: any) => ({ id: p.id as string, name: p.name as string }))}
+            refStills={refStills}
+            onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+          />
+        </div>
+      )}
+
+      {/* JSON tab */}
+      {activeTab === 'json' && isLoaded && 'parsedJson' in state && (
+        <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[700px] whitespace-pre leading-relaxed border border-stone-100">
+          {JSON.stringify(state.parsedJson, null, 2)}
+        </pre>
       )}
     </div>
   );

@@ -12,7 +12,7 @@ export interface ImageModel {
 // Ordered best-first.
 const FALLBACK_MODELS: ImageModel[] = [
   {
-    id: 'imagen-3.0-generate-002',
+    id: 'imagen-3.0-generate-001',
     label: 'Imagen 3',
     description: 'Best quality',
   },
