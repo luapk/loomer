@@ -7,7 +7,7 @@ import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, ChevronDown, Check, ImageIcon,
-  Film, Download,
+  Film, Download, Pencil,
 } from 'lucide-react';
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
@@ -857,22 +857,52 @@ export default function HomePage() {
             title="Characters"
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             entities={(state.parsedJson?.characters ?? []).map((c: any) => ({ id: c.id as string, name: c.name as string }))}
+            storyboardId={state.id}
             refStills={refStills}
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+            onUploaded={(entityId, url, candidates) => {
+              setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
+            }}
           />
           <EntitySection
             title="Locations"
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             entities={(state.parsedJson?.locations ?? []).map((l: any) => ({ id: l.id as string, name: l.name as string }))}
+            storyboardId={state.id}
             refStills={refStills}
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+            onUploaded={(entityId, url, candidates) => {
+              setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
+            }}
           />
           <EntitySection
             title="Props"
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             entities={(state.parsedJson?.props ?? []).filter((p: any) => p.generates_reference_still as boolean).map((p: any) => ({ id: p.id as string, name: p.name as string }))}
+            storyboardId={state.id}
             refStills={refStills}
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+            onUploaded={(entityId, url, candidates) => {
+              setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
+            }}
           />
         </div>
       )}
@@ -880,6 +910,21 @@ export default function HomePage() {
       {/* Boards tab */}
       {activeTab === 'boards' && isLoaded && 'parsedJson' in state && (
         <div className="space-y-4">
+          {/* Toolbar */}
+          {shotsTotal > 0 && (
+            <div className="flex items-center gap-3 flex-wrap">
+              {'id' in state && Object.values(shotKeyFrames).some((f) => f.status === 'done' && f.url) && (
+                <a
+                  href={`/api/storyboard/${state.id}/download-zip`}
+                  download
+                  className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors bg-white/40"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download ZIP
+                </a>
+              )}
+            </div>
+          )}
           {shotsTotal === 0 && !shotsGenerating && (
             <div className="flex flex-col items-center justify-center py-16 text-stone-400 space-y-3">
               <Film className="h-8 w-8" />
@@ -950,95 +995,253 @@ export default function HomePage() {
 
 // ─── EntitySection ────────────────────────────────────────────────────────────
 
+// ─── EntityCard ────────────────────────────────────────────────────────────────
+
+function EntityCard({
+  entity,
+  still,
+  storyboardId,
+  onApprove,
+  onUploaded,
+  onFineTuned,
+}: {
+  entity: { id: string; name: string };
+  still: ReferenceStills[string] | undefined;
+  storyboardId: string;
+  onApprove: (entityId: string, url: string) => void;
+  onUploaded: (entityId: string, url: string, candidates: string[]) => void;
+  onFineTuned: (entityId: string, candidates: string[]) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fine-tune state
+  const [fineTuneOpen, setFineTuneOpen] = useState(false);
+  const [fineTuneNotes, setFineTuneNotes] = useState('');
+  const [fineTuning, setFineTuning] = useState(false);
+  const [fineTuneError, setFineTuneError] = useState<string | null>(null);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('entityId', entity.id);
+      form.append('file', file);
+      const res = await fetch(`/api/storyboard/${storyboardId}/upload-ref`, { method: 'POST', body: form });
+      if (res.ok) {
+        const data = await res.json() as { url: string; candidates: string[] };
+        onUploaded(entity.id, data.url, data.candidates);
+      }
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleFineTune() {
+    setFineTuning(true);
+    setFineTuneError(null);
+    try {
+      const res = await fetch(`/api/storyboard/${storyboardId}/regen-ref`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entityId: entity.id, notes: fineTuneNotes }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        throw new Error(err.error ?? 'Fine-tune failed');
+      }
+      const data = await res.json() as { candidates: string[] };
+      onFineTuned(entity.id, data.candidates);
+      setFineTuneOpen(false);
+      setFineTuneNotes('');
+    } catch (err) {
+      setFineTuneError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setFineTuning(false);
+    }
+  }
+
+  const isGenerating = still?.status === 'generating';
+  const hasError = still?.status === 'error' && still.candidates.length === 0;
+  const candidates = still?.candidates ?? [];
+
+  return (
+    <div className="glass rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-medium text-stone-900">{entity.name}</span>
+          <span className="text-xs font-mono text-stone-400 truncate">{entity.id}</span>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {still?.selected && (
+            <div className="flex items-center gap-1 text-xs text-green-700">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Approved
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleUpload}
+          />
+          {!hasError && (
+            <>
+              <button
+                onClick={() => { setFineTuneOpen((v) => !v); setFineTuneError(null); }}
+                disabled={fineTuning}
+                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+                title="Fine-tune with director's notes"
+              >
+                <Pencil className="h-3 w-3" />
+                Fine-tune
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+                title="Upload your own reference image"
+              >
+                {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+                Upload
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Fine-tune inline form */}
+      {fineTuneOpen && (
+        <div className="rounded-lg bg-stone-50 border border-stone-200 p-3 space-y-2">
+          <textarea
+            rows={2}
+            value={fineTuneNotes}
+            onChange={(e) => setFineTuneNotes(e.target.value)}
+            placeholder="e.g. make the jacket leather, shorter hair, add a beard…"
+            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+            disabled={fineTuning}
+          />
+          {fineTuneError && (
+            <p className="text-xs text-red-600 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+              {fineTuneError}
+            </p>
+          )}
+          <button
+            onClick={() => void handleFineTune()}
+            disabled={fineTuning || !fineTuneNotes.trim()}
+            className="flex items-center gap-1.5 text-xs font-medium text-white bg-stone-800 rounded-md px-2.5 py-1.5 hover:bg-stone-900 transition-colors disabled:opacity-50"
+          >
+            {fineTuning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
+            {fineTuning ? 'Regenerating…' : 'Regenerate with notes'}
+          </button>
+        </div>
+      )}
+
+      {!still && (
+        <p className="text-xs text-stone-400 flex items-center gap-2 py-1">
+          <span className="h-2 w-2 rounded-full bg-stone-200 flex-shrink-0" />
+          Pending generation
+        </p>
+      )}
+
+      {isGenerating && candidates.length === 0 && (
+        <p className="text-xs text-stone-500 flex items-center gap-2 py-1">
+          <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
+          Generating…
+        </p>
+      )}
+
+      {hasError && (
+        <div className="rounded-lg bg-red-50 border border-red-100 p-3 space-y-2">
+          <div className="text-xs text-red-700 flex items-start gap-2">
+            <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+            <span>{still.error ?? 'Generation failed'}</span>
+          </div>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-1.5 text-xs font-medium text-stone-700 bg-white border border-stone-200 rounded-md px-2.5 py-1.5 hover:bg-stone-50 transition-colors disabled:opacity-50"
+          >
+            {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+            {uploading ? 'Uploading…' : 'Upload your own reference'}
+          </button>
+        </div>
+      )}
+
+      {candidates.length > 0 && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {candidates.map((url, i) => {
+              const isSelected = still?.selected === url;
+              return (
+                <button
+                  key={url}
+                  onClick={() => onApprove(entity.id, url)}
+                  className={`relative group rounded-lg overflow-hidden aspect-square border-2 transition-all ${
+                    isSelected
+                      ? 'border-stone-900 ring-2 ring-stone-900/20'
+                      : 'border-transparent hover:border-stone-300'
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={url} alt={`${entity.name} candidate ${i + 1}`} className="w-full h-full object-cover" />
+                  {isSelected ? (
+                    <div className="absolute inset-0 bg-stone-900/20 flex items-center justify-center">
+                      <div className="bg-stone-900 rounded-full p-1">
+                        <Check className="h-3 w-3 text-white" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="absolute inset-0 bg-stone-900/0 group-hover:bg-stone-900/10 transition-colors" />
+                  )}
+                </button>
+              );
+            })}
+            {isGenerating && (
+              <div className="aspect-square rounded-lg border-2 border-dashed border-stone-200 flex items-center justify-center">
+                <Loader2 className="h-4 w-4 text-stone-300 animate-spin" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface EntitySectionProps {
   title: string;
   entities: { id: string; name: string }[];
+  storyboardId: string;
   refStills: ReferenceStills;
   onApprove: (entityId: string, url: string) => void;
+  onUploaded: (entityId: string, url: string, candidates: string[]) => void;
+  onFineTuned: (entityId: string, candidates: string[]) => void;
 }
 
-function EntitySection({ title, entities, refStills, onApprove }: EntitySectionProps) {
+function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded, onFineTuned }: EntitySectionProps) {
   if (entities.length === 0) return null;
 
   return (
     <div className="space-y-3">
       <h4 className="text-xs font-semibold text-stone-500 uppercase tracking-wider">{title}</h4>
       <div className="space-y-4">
-        {entities.map((entity) => {
-          const still = refStills[entity.id];
-          return (
-            <div key={entity.id} className="glass rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-medium text-stone-900">{entity.name}</span>
-                  <span className="text-xs font-mono text-stone-400 truncate">{entity.id}</span>
-                </div>
-                {still?.selected && (
-                  <div className="flex items-center gap-1 text-xs text-green-700 flex-shrink-0">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Approved
-                  </div>
-                )}
-              </div>
-
-              {!still && (
-                <p className="text-xs text-stone-400 flex items-center gap-2 py-1">
-                  <span className="h-2 w-2 rounded-full bg-stone-200 flex-shrink-0" />
-                  Pending generation
-                </p>
-              )}
-
-              {still?.status === 'generating' && (
-                <p className="text-xs text-stone-500 flex items-center gap-2 py-1">
-                  <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
-                  Generating candidates…
-                </p>
-              )}
-
-              {still?.status === 'error' && (
-                <p className="text-xs text-red-600 flex items-center gap-2 py-1">
-                  <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-                  {still.error ?? 'Generation failed'}
-                </p>
-              )}
-
-              {still?.status === 'done' && still.candidates.length > 0 && (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {still.candidates.map((url, i) => {
-                    const isSelected = still.selected === url;
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => onApprove(entity.id, url)}
-                        className={`relative group rounded-lg overflow-hidden aspect-square border-2 transition-all ${
-                          isSelected
-                            ? 'border-stone-900 ring-2 ring-stone-900/20'
-                            : 'border-transparent hover:border-stone-300'
-                        }`}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={url}
-                          alt={`${entity.name} candidate ${i + 1}`}
-                          className="w-full h-full object-cover"
-                        />
-                        {isSelected ? (
-                          <div className="absolute inset-0 bg-stone-900/20 flex items-center justify-center">
-                            <div className="bg-stone-900 rounded-full p-1">
-                              <Check className="h-3 w-3 text-white" />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="absolute inset-0 bg-stone-900/0 group-hover:bg-stone-900/10 transition-colors" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {entities.map((entity) => (
+          <EntityCard
+            key={entity.id}
+            entity={entity}
+            still={refStills[entity.id]}
+            storyboardId={storyboardId}
+            onApprove={onApprove}
+            onUploaded={onUploaded}
+            onFineTuned={onFineTuned}
+          />
+        ))}
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import { getDb } from '@/src/lib/db';
 import { ParsedStoryboardSchema } from '@/src/schema/storyboard';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 // ============================================================================
 // Layout constants
