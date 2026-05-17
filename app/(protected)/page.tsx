@@ -404,7 +404,29 @@ export default function HomePage() {
         }
       }
     } catch {
-      setState({ phase: 'error', message: 'Lost connection during parse.' });
+      // Connection dropped — check if the parse already completed in the DB
+      // before showing an error. This recovers from transient network blips
+      // where the server finished but the SSE stream closed before the client
+      // received the done event.
+      try {
+        const check = await fetch(`/api/storyboard/${id}`);
+        if (check.ok) {
+          const data = await check.json() as { status?: string; parsed_json?: unknown; title?: string };
+          if (data.status === 'PARSED' && data.parsed_json) {
+            setState({
+              phase: 'parsed',
+              id,
+              title: typeof data.title === 'string' ? data.title : title,
+              markdown,
+              parsedJson: data.parsed_json,
+              warnings: [],
+            });
+            setActiveTab('storyboard');
+            return;
+          }
+        }
+      } catch { /* ignore recovery errors, fall through to error state */ }
+      setState({ phase: 'error', message: 'Lost connection during parse. Please try again.' });
     }
   }
 
