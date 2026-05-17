@@ -27,6 +27,15 @@ function videoBlobPath(shotNumber: number) {
 }
 
 export async function GET(request: NextRequest) {
+  try {
+    return await handler(request);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+async function handler(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const phase = searchParams.get('phase') ?? 'start';
   const shotNumber = Number(searchParams.get('shot'));
