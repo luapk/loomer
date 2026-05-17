@@ -83,7 +83,7 @@ function HomePageInner() {
   const [state, setState] = useState<State>({ phase: 'empty' });
 
   const [renderStyle, setRenderStyle] = useState<RenderStyle>('PHOTOREAL');
-  const [imageModel, setImageModel] = useState<string>('gemini-2.0-flash-preview-image-generation');
+  const [imageModel, setImageModel] = useState<string>('nano-banana-pro-preview');
   const [availableModels, setAvailableModels] = useState<ImageModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -150,7 +150,12 @@ function HomePageInner() {
         shot_key_frames: unknown;
       }) => {
         if (data.render_style) setRenderStyle(data.render_style);
-        if (data.image_model) setImageModel(data.image_model);
+        // Only restore the saved model if it's a known-good ID — stale records may
+        // have the old non-existent 'gemini-2.0-flash-preview-image-generation' name.
+        const KNOWN_IMAGE_MODELS = ['nano-banana-pro-preview', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image'];
+        if (data.image_model && KNOWN_IMAGE_MODELS.includes(data.image_model)) {
+          setImageModel(data.image_model);
+        }
 
         const refStillsData = data.reference_stills as ReferenceStills | null;
         if (refStillsData) {
@@ -1142,15 +1147,17 @@ function EntityCard({
             className="hidden"
             onChange={handleUpload}
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
-            title="Upload your own reference image"
-          >
-            {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
-            Upload
-          </button>
+          {!hasError && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+              title="Upload your own reference image"
+            >
+              {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+              Upload
+            </button>
+          )}
         </div>
       </div>
 

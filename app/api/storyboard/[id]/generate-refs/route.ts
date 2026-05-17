@@ -31,26 +31,35 @@ function buildPrompt(
 
 // Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
 // Returns base64 bytes + mime type, or null if the response contains no image part.
+// Returns image data, or throws a descriptive error explaining why no image was produced.
 async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-): Promise<{ data: string; mimeType: string } | null> {
+): Promise<{ data: string; mimeType: string }> {
   const delays = [5000, 15000, 30000];
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
       const response = await ai.models.generateContent({
         model,
         contents: prompt,
-        config: { responseModalities: [Modality.IMAGE] },
+        config: { responseModalities: [Modality.IMAGE, Modality.TEXT] },
       });
-      for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+      const candidate = response.candidates?.[0];
+      for (const part of candidate?.content?.parts ?? []) {
         if (part.inlineData?.data) {
           return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
         }
       }
-      // Model responded but returned no image (content blocked / text-only response)
-      return null;
+      // Surface why there's no image: finish reason, safety ratings, or any text the model returned
+      const finishReason = candidate?.finishReason ?? 'UNKNOWN';
+      const textParts = (candidate?.content?.parts ?? [])
+        .filter((p) => p.text)
+        .map((p) => p.text)
+        .join(' ')
+        .slice(0, 200);
+      const detail = textParts ? `Model said: "${textParts}"` : `Finish reason: ${finishReason}`;
+      throw new Error(`No image in response (model: ${model}). ${detail}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isRetryable = msg.includes('"code":429') || msg.includes('"code":400');
@@ -61,7 +70,8 @@ async function generateOneImage(
       throw err;
     }
   }
-  return null;
+  // Unreachable but required for TypeScript
+  throw new Error('generateOneImage: exhausted retries');
 }
 
 // Upload a single candidate image to Vercel Blob and return its public URL.
@@ -170,7 +180,6 @@ export async function POST(
             const candidateResults = await Promise.allSettled(
               [0, 1].map(async (j) => {
                 const img = await generateOneImage(ai, model, prompt);
-                if (!img) return null;
                 const url = await uploadCandidate(id, entity.id, j, img);
                 send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
                 return url;
@@ -178,7 +187,7 @@ export async function POST(
             );
 
             const candidates = candidateResults
-              .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && r.value !== null)
+              .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
               .map((r) => r.value);
 
             // Log any candidate-level failures so they're visible
