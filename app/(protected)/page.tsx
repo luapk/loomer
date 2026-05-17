@@ -7,7 +7,7 @@ import { Textarea } from '@/src/components/ui/textarea';
 import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
-  Camera, Paintbrush, ChevronDown, Check, ImageIcon,
+  Camera, Paintbrush, Check, ImageIcon,
   Film, Download, ScanEye, Pencil,
 } from 'lucide-react';
 import type { ImageModel } from '@/app/api/google-models/route';
@@ -171,7 +171,7 @@ function HomePageInner() {
         if (data.render_style) setRenderStyle(data.render_style);
         // Only restore the saved model if it's a known-good ID — stale records may
         // have the old non-existent 'gemini-2.0-flash-preview-image-generation' name.
-        const KNOWN_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview'];
+        const KNOWN_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'];
         if (data.image_model && KNOWN_IMAGE_MODELS.includes(data.image_model)) {
           setImageModel(data.image_model);
         }
@@ -874,18 +874,32 @@ function HomePageInner() {
                 Checking available models…
               </div>
             ) : (
-              <div className="relative">
-                <select
-                  value={imageModel}
-                  onChange={(e) => setImageModel(e.target.value)}
-                  disabled={state.phase === 'generating_refs'}
-                  className="w-full appearance-none rounded-lg border border-stone-200 bg-white px-3 py-2 pr-8 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.label} — {m.description}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-stone-400" />
+              <div className="space-y-1.5">
+                {availableModels.map((m) => {
+                  const active = imageModel === m.id;
+                  const unavailable = !m.available;
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => !unavailable && setImageModel(m.id)}
+                      disabled={state.phase === 'generating_refs' || unavailable}
+                      className={`w-full text-left rounded-lg border px-3 py-2 text-xs transition-all ${
+                        unavailable
+                          ? 'border-stone-100 bg-stone-50 cursor-not-allowed'
+                          : active
+                            ? 'border-stone-900 bg-stone-900 text-white'
+                            : 'border-stone-200 bg-white hover:border-stone-300'
+                      }`}
+                    >
+                      <span className={`font-medium ${unavailable ? 'text-stone-300' : active ? 'text-white' : 'text-stone-900'}`}>
+                        {m.label}
+                      </span>
+                      <span className={`ml-2 ${unavailable ? 'text-stone-300' : active ? 'text-stone-300' : 'text-stone-400'}`}>
+                        {unavailable ? 'Quota exceeded' : m.description}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
