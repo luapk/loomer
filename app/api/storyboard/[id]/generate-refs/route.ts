@@ -190,17 +190,14 @@ export async function POST(
               .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
               .map((r) => r.value);
 
-            // Log any candidate-level failures so they're visible
-            candidateResults.forEach((r, j) => {
-              if (r.status === 'rejected') {
-                const msg = r.reason instanceof Error ? r.reason.message.slice(0, 120) : String(r.reason);
-                send({ type: 'entity_candidate_error', entityId: entity.id, index: j, message: msg });
-              }
-            });
+            // Collect actual rejection reasons — these are the real API errors
+            const rejectionMsgs = candidateResults
+              .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+              .map((r) => r.reason instanceof Error ? r.reason.message.slice(0, 200) : String(r.reason));
 
             const status = candidates.length > 0 ? 'done' : 'error';
             const errorMsg = candidates.length === 0
-              ? 'All candidates returned no image — the model may have blocked the prompt or hit a quota limit.'
+              ? rejectionMsgs[0] ?? 'All candidates failed with unknown error.'
               : undefined;
             refStills[entity.id] = { status, candidates, selected: null, ...(errorMsg ? { error: errorMsg } : {}) };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
