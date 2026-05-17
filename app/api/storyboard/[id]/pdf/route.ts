@@ -71,7 +71,8 @@ function slugify(title: string): string {
 }
 
 /** Sanitize text for WinAnsi encoding — standard pdf-lib fonts only support Latin-1. */
-function safe(text: string): string {
+function safe(text: string | null | undefined): string {
+  if (!text) return "";
   return text
     .replace(/—/g, '--')   // em dash
     .replace(/–/g, '-')    // en dash
@@ -462,23 +463,29 @@ export async function GET(
 
   // ── Build PDF ──────────────────────────────────────────────────────────────
 
-  const pdfDoc = await PDFDocument.create();
+  try {
+    const pdfDoc = await PDFDocument.create();
 
-  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const italic = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
+    const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const italic = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
 
-  await buildGridPages(pdfDoc, { regular, bold, italic }, parsed, keyFrames);
+    await buildGridPages(pdfDoc, { regular, bold, italic }, parsed, keyFrames);
 
-  const pdfBytes = await pdfDoc.save();
+    const pdfBytes = await pdfDoc.save();
 
-  const filename = `${slugify(parsed.title || row.title)}.pdf`;
+    const filename = `${slugify(parsed.title || row.title)}.pdf`;
 
-  return new Response(new Uint8Array(pdfBytes), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-    },
-  });
+    return new Response(new Uint8Array(pdfBytes), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('PDF generation failed:', message);
+    return Response.json({ error: 'PDF generation failed', details: message }, { status: 500 });
+  }
 }
