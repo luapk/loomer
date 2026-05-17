@@ -29,7 +29,7 @@ function buildPrompt(
   return `${base}\n\nStyle: ${styleParts.join(' ')}`;
 }
 
-// Generate one image, retrying on 429 with exponential backoff (up to 3 attempts).
+// Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
 // Returns base64 bytes + mime type, or null if the response contains no image part.
 async function generateOneImage(
   ai: GoogleGenAI,
@@ -49,10 +49,12 @@ async function generateOneImage(
           return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
         }
       }
+      // Model responded but returned no image (content blocked / text-only response)
       return null;
     } catch (err) {
-      const is429 = err instanceof Error && err.message.includes('"code":429');
-      if (is429 && attempt < delays.length) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isRetryable = msg.includes('"code":429') || msg.includes('"code":400');
+      if (isRetryable && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
       }
@@ -60,6 +62,23 @@ async function generateOneImage(
     }
   }
   return null;
+}
+
+// Upload a single candidate image to Vercel Blob and return its public URL.
+async function uploadCandidate(
+  storyboardId: string,
+  entityId: string,
+  index: number,
+  img: { data: string; mimeType: string },
+): Promise<string> {
+  const buffer = Buffer.from(img.data, 'base64');
+  const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+  const blob = await put(
+    `${storyboardId}/refs/${entityId}/${index}.${ext}`,
+    buffer,
+    { access: 'public', contentType: img.mimeType },
+  );
+  return blob.url;
 }
 
 export async function POST(
@@ -139,31 +158,39 @@ export async function POST(
             try {
               const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
 
-              // 4 candidates per entity, also in parallel
-              const results = await Promise.allSettled(
-                Array.from({ length: 4 }, (_, j) =>
-                  generateOneImage(ai, model, prompt).then(async (img) => {
-                    if (!img) return null;
-                    const buffer = Buffer.from(img.data, 'base64');
-                    const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
-                    const blob = await put(
-                      `${id}/refs/${entity.id}/${j}.${ext}`,
-                      buffer,
-                      { access: 'public', contentType: img.mimeType },
-                    );
-                    return blob.url;
-                  }),
-                ),
-              );
+              // Generate candidates SEQUENTIALLY within each entity so we don't
+              // fire N-entities × 4-candidates = 44+ simultaneous API calls that
+              // all hit the per-minute rate limit. Entities remain parallel (each
+              // entity is its own async task), but candidates within an entity are
+              // serial. This caps concurrent calls at entity-count (e.g. 11), not
+              // entity-count × 4.
+              const candidates: string[] = [];
+              for (let j = 0; j < 4; j++) {
+                try {
+                  const img = await generateOneImage(ai, model, prompt);
+                  if (img) {
+                    const url = await uploadCandidate(id, entity.id, j, img);
+                    candidates.push(url);
+                    // Stream each candidate as it arrives so the UI can show it immediately
+                    send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
+                  }
+                } catch (candidateErr) {
+                  // Log but continue — one bad candidate shouldn't abort the rest
+                  const msg = candidateErr instanceof Error ? candidateErr.message.slice(0, 120) : String(candidateErr);
+                  send({ type: 'entity_candidate_error', entityId: entity.id, index: j, message: msg });
+                }
+              }
 
-              const candidates = results
-                .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && r.value !== null)
-                .map((r) => r.value);
-
-              refStills[entity.id] = { status: 'done', candidates, selected: null };
+              const status = candidates.length > 0 ? 'done' : 'error';
+              const errorMsg = candidates.length === 0 ? 'All candidates returned no image. The model may have blocked the prompt or hit a quota limit.' : undefined;
+              refStills[entity.id] = { status, candidates, selected: null, ...(errorMsg ? { error: errorMsg } : {}) };
               await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
 
-              send({ type: 'entity_done', entityId: entity.id, candidates, durationMs: Date.now() - entityStart });
+              if (candidates.length > 0) {
+                send({ type: 'entity_done', entityId: entity.id, candidates, durationMs: Date.now() - entityStart });
+              } else {
+                send({ type: 'entity_error', entityId: entity.id, message: errorMsg!, durationMs: Date.now() - entityStart });
+              }
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               refStills[entity.id] = { status: 'error', candidates: [], selected: null, error: message };

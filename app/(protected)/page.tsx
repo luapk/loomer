@@ -266,6 +266,17 @@ function HomePageInner() {
               ...prev,
               entities: [...prev.entities, { id: entityId, name: entityName, type: entityType, startMs: Date.now() }],
             }));
+          } else if (payload['type'] === 'entity_candidate') {
+            // A single candidate arrived — show it immediately without waiting for all 4
+            const entityId = payload['entityId'] as string;
+            const url = payload['url'] as string;
+            setRefStills((prev) => {
+              const existing = prev[entityId] ?? { status: 'generating', candidates: [], selected: null };
+              return {
+                ...prev,
+                [entityId]: { ...existing, candidates: [...existing.candidates, url] },
+              };
+            });
           } else if (payload['type'] === 'entity_done') {
             const entityId = payload['entityId'] as string;
             const candidates = payload['candidates'] as string[];
@@ -273,7 +284,7 @@ function HomePageInner() {
             setRefsCurrentEntity(null);
             setRefStills((prev) => ({
               ...prev,
-              [entityId]: { status: 'done', candidates, selected: null },
+              [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
             }));
             setDevStats((prev) => ({
               ...prev,
@@ -930,22 +941,34 @@ function HomePageInner() {
             title="Characters"
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             entities={(state.parsedJson?.characters ?? []).map((c: any) => ({ id: c.id as string, name: c.name as string }))}
+            storyboardId={state.id}
             refStills={refStills}
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+            onUploaded={(entityId, url, candidates) => {
+              setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
           />
           <EntitySection
             title="Locations"
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             entities={(state.parsedJson?.locations ?? []).map((l: any) => ({ id: l.id as string, name: l.name as string }))}
+            storyboardId={state.id}
             refStills={refStills}
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+            onUploaded={(entityId, url, candidates) => {
+              setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
           />
           <EntitySection
             title="Props"
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             entities={(state.parsedJson?.props ?? []).filter((p: any) => p.generates_reference_still as boolean).map((p: any) => ({ id: p.id as string, name: p.name as string }))}
+            storyboardId={state.id}
             refStills={refStills}
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
+            onUploaded={(entityId, url, candidates) => {
+              setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
           />
         </div>
       )}
@@ -1030,95 +1053,166 @@ function HomePageInner() {
 
 // ─── EntitySection ────────────────────────────────────────────────────────────
 
+function EntityCard({
+  entity,
+  still,
+  storyboardId,
+  onApprove,
+  onUploaded,
+}: {
+  entity: { id: string; name: string };
+  still: ReferenceStills[string] | undefined;
+  storyboardId: string;
+  onApprove: (entityId: string, url: string) => void;
+  onUploaded: (entityId: string, url: string, candidates: string[]) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('entityId', entity.id);
+      form.append('file', file);
+      const res = await fetch(`/api/storyboard/${storyboardId}/upload-ref`, { method: 'POST', body: form });
+      if (res.ok) {
+        const data = await res.json() as { url: string; candidates: string[] };
+        onUploaded(entity.id, data.url, data.candidates);
+      }
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  const isGenerating = still?.status === 'generating';
+  const hasError = still?.status === 'error' && still.candidates.length === 0;
+  const candidates = still?.candidates ?? [];
+
+  return (
+    <div className="glass rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-medium text-stone-900">{entity.name}</span>
+          <span className="text-xs font-mono text-stone-400 truncate">{entity.id}</span>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {still?.selected && (
+            <div className="flex items-center gap-1 text-xs text-green-700">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Approved
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleUpload}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+            title="Upload your own reference image"
+          >
+            {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+            Upload
+          </button>
+        </div>
+      </div>
+
+      {!still && (
+        <p className="text-xs text-stone-400 flex items-center gap-2 py-1">
+          <span className="h-2 w-2 rounded-full bg-stone-200 flex-shrink-0" />
+          Pending generation
+        </p>
+      )}
+
+      {isGenerating && candidates.length === 0 && (
+        <p className="text-xs text-stone-500 flex items-center gap-2 py-1">
+          <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
+          Generating…
+        </p>
+      )}
+
+      {hasError && (
+        <div className="text-xs text-red-600 flex items-start gap-2 py-1">
+          <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+          <span>{still.error ?? 'Generation failed'} — upload your own reference above.</span>
+        </div>
+      )}
+
+      {candidates.length > 0 && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {candidates.map((url, i) => {
+              const isSelected = still?.selected === url;
+              return (
+                <button
+                  key={url}
+                  onClick={() => onApprove(entity.id, url)}
+                  className={`relative group rounded-lg overflow-hidden aspect-square border-2 transition-all ${
+                    isSelected
+                      ? 'border-stone-900 ring-2 ring-stone-900/20'
+                      : 'border-transparent hover:border-stone-300'
+                  }`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={url} alt={`${entity.name} candidate ${i + 1}`} className="w-full h-full object-cover" />
+                  {isSelected ? (
+                    <div className="absolute inset-0 bg-stone-900/20 flex items-center justify-center">
+                      <div className="bg-stone-900 rounded-full p-1">
+                        <Check className="h-3 w-3 text-white" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="absolute inset-0 bg-stone-900/0 group-hover:bg-stone-900/10 transition-colors" />
+                  )}
+                </button>
+              );
+            })}
+            {isGenerating && (
+              <div className="aspect-square rounded-lg border-2 border-dashed border-stone-200 flex items-center justify-center">
+                <Loader2 className="h-4 w-4 text-stone-300 animate-spin" />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface EntitySectionProps {
   title: string;
   entities: { id: string; name: string }[];
+  storyboardId: string;
   refStills: ReferenceStills;
   onApprove: (entityId: string, url: string) => void;
+  onUploaded: (entityId: string, url: string, candidates: string[]) => void;
 }
 
-function EntitySection({ title, entities, refStills, onApprove }: EntitySectionProps) {
+function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded }: EntitySectionProps) {
   if (entities.length === 0) return null;
 
   return (
     <div className="space-y-3">
       <h4 className="text-xs font-semibold text-stone-500 uppercase tracking-wider">{title}</h4>
       <div className="space-y-4">
-        {entities.map((entity) => {
-          const still = refStills[entity.id];
-          return (
-            <div key={entity.id} className="glass rounded-xl p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-medium text-stone-900">{entity.name}</span>
-                  <span className="text-xs font-mono text-stone-400 truncate">{entity.id}</span>
-                </div>
-                {still?.selected && (
-                  <div className="flex items-center gap-1 text-xs text-green-700 flex-shrink-0">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Approved
-                  </div>
-                )}
-              </div>
-
-              {!still && (
-                <p className="text-xs text-stone-400 flex items-center gap-2 py-1">
-                  <span className="h-2 w-2 rounded-full bg-stone-200 flex-shrink-0" />
-                  Pending generation
-                </p>
-              )}
-
-              {still?.status === 'generating' && (
-                <p className="text-xs text-stone-500 flex items-center gap-2 py-1">
-                  <Loader2 className="h-3 w-3 animate-spin flex-shrink-0" />
-                  Generating candidates…
-                </p>
-              )}
-
-              {still?.status === 'error' && (
-                <p className="text-xs text-red-600 flex items-center gap-2 py-1">
-                  <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-                  {still.error ?? 'Generation failed'}
-                </p>
-              )}
-
-              {still?.status === 'done' && still.candidates.length > 0 && (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {still.candidates.map((url, i) => {
-                    const isSelected = still.selected === url;
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => onApprove(entity.id, url)}
-                        className={`relative group rounded-lg overflow-hidden aspect-square border-2 transition-all ${
-                          isSelected
-                            ? 'border-stone-900 ring-2 ring-stone-900/20'
-                            : 'border-transparent hover:border-stone-300'
-                        }`}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={url}
-                          alt={`${entity.name} candidate ${i + 1}`}
-                          className="w-full h-full object-cover"
-                        />
-                        {isSelected ? (
-                          <div className="absolute inset-0 bg-stone-900/20 flex items-center justify-center">
-                            <div className="bg-stone-900 rounded-full p-1">
-                              <Check className="h-3 w-3 text-white" />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="absolute inset-0 bg-stone-900/0 group-hover:bg-stone-900/10 transition-colors" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {entities.map((entity) => (
+          <EntityCard
+            key={entity.id}
+            entity={entity}
+            still={refStills[entity.id]}
+            storyboardId={storyboardId}
+            onApprove={onApprove}
+            onUploaded={onUploaded}
+          />
+        ))}
       </div>
     </div>
   );
