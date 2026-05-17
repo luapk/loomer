@@ -1,79 +1,72 @@
-import { PrismaClient } from '@prisma/client';
-import { PrismaPg } from '@prisma/adapter-pg';
-import { GoogleGenAI } from '@google/genai';
 import fs from 'fs';
-import path from 'path';
 
-const DB = process.env.DATABASE_URL!;
-const GKEY = process.env.GOOGLE_AI_API_KEY!;
+const BASE_URL = 'https://loomer-eight.vercel.app';
 
-async function main() {
-  const adapter = new PrismaPg({ connectionString: DB });
-  const db = new PrismaClient({ adapter });
+const SHOTS: Array<{ shot: number; url: string }> = [
+  { shot: 1, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/1-regen-1779052770811.png' },
+  { shot: 2, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/2.png' },
+  { shot: 3, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/3-regen-1779051696161.png' },
+  { shot: 4, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/4-regen-1779052818106.png' },
+  { shot: 5, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/5.png' },
+  { shot: 6, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/6-regen-1779051753778.png' },
+  { shot: 7, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/7-regen-1779052850367.png' },
+  { shot: 8, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/8-regen-1779051777038.png' },
+  { shot: 9, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/9.png' },
+  { shot: 10, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/10.png' },
+  { shot: 11, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/11-regen-1779052891655.png' },
+  { shot: 12, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/12-regen-1779052925584.png' },
+  { shot: 13, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/13-regen-1779051818742.png' },
+  { shot: 14, url: 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com/94bc3d16-ff1a-4dfd-b56a-66a335c057ba/shots/14.png' },
+];
 
-  // Find the most recent storyboard with completed frames
-  const boards = await db.storyboard.findMany({
-    select: { id: true, title: true, shot_key_frames: true },
-    orderBy: { created_at: 'desc' },
+async function processShot(shot: number, imageUrl: string): Promise<string | null> {
+  const outPath = `/tmp/leo-shot-${String(shot).padStart(2, '0')}.mp4`;
+  if (fs.existsSync(outPath)) {
+    console.log(`Shot ${shot}: already exists, skipping → ${outPath}`);
+    return outPath;
+  }
+
+  console.log(`Shot ${shot}: calling debug-veo-single endpoint...`);
+  const start = Date.now();
+
+  const res = await fetch(`${BASE_URL}/api/debug-veo-single`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shotNumber: shot, imageUrl }),
+    signal: AbortSignal.timeout(270_000),
   });
 
-  let target: typeof boards[0] | undefined;
-  for (const b of boards) {
-    const frames = b.shot_key_frames as Record<string, { status: string; url: string | null }> | null;
-    const done = frames ? Object.values(frames).filter(f => f.status === 'done').length : 0;
-    console.log(b.id, '|', b.title, '|', done, 'frames');
-    if (!target && done > 0) target = b;
+  if (!res.ok) {
+    const err = await res.text();
+    console.log(`Shot ${shot}: ERROR ${res.status} — ${err}`);
+    return null;
   }
 
-  await db.$disconnect();
+  const data = (await res.json()) as { shotNumber: number; url: string; sizeBytes: number };
+  const elapsed = Math.round((Date.now() - start) / 1000);
+  console.log(`Shot ${shot}: done in ${elapsed}s — blob URL: ${data.url}`);
 
-  if (!target) { console.log('No boards with frames found'); return; }
+  // Download from Vercel Blob to local /tmp
+  const vidRes = await fetch(data.url);
+  if (!vidRes.ok) { console.log(`Shot ${shot}: download failed`); return null; }
+  fs.writeFileSync(outPath, Buffer.from(await vidRes.arrayBuffer()));
+  console.log(`Shot ${shot}: saved to ${outPath} (${(data.sizeBytes / 1024 / 1024).toFixed(1)} MB)\n`);
+  return outPath;
+}
 
-  const frames = target.shot_key_frames as Record<string, { status: string; url: string | null }>;
-  const shots = Object.entries(frames)
-    .filter(([, f]) => f.status === 'done' && f.url)
-    .sort(([a], [b]) => Number(a) - Number(b));
+async function main() {
+  console.log(`Testing Veo image-to-video on ${SHOTS.length} Leo shots via ${BASE_URL}\n`);
 
-  console.log(`\nUsing storyboard: ${target.title} (${target.id})`);
-  console.log(`Generating clips for ${shots.length} shots...\n`);
-
-  const ai = new GoogleGenAI({ apiKey: GKEY });
-
-  for (const [shotNum, frame] of shots) {
-    console.log(`Shot ${shotNum}: fetching image...`);
-    const imgRes = await fetch(frame.url!);
-    const imgBuf = await imgRes.arrayBuffer();
-    const imgB64 = Buffer.from(imgBuf).toString('base64');
-    const mimeType = imgRes.headers.get('content-type') ?? 'image/jpeg';
-
-    console.log(`Shot ${shotNum}: starting Veo generation...`);
-    const start = Date.now();
-    let op = await ai.models.generateVideos({
-      model: 'veo-2.0-generate-001',
-      prompt: `Cinematic storyboard shot, British coastal naturalism, Kodak Vision3 500T, muted naturalistic tones`,
-      image: { imageBytes: imgB64, mimeType },
-      config: { durationSeconds: 5, aspectRatio: '16:9', numberOfVideos: 1 },
-    });
-
-    while (!op.done) {
-      await new Promise(r => setTimeout(r, 10000));
-      op = await ai.operations.getVideosOperation({ operation: op });
-      console.log(`  Shot ${shotNum}: waiting... ${Math.round((Date.now()-start)/1000)}s`);
-    }
-
-    const videoUri = op.response?.generatedVideos?.[0]?.video?.uri;
-    if (!videoUri) { console.log(`  Shot ${shotNum}: no video URI`); continue; }
-
-    // Download the video
-    const vidRes = await fetch(videoUri, { headers: { 'x-goog-api-key': GKEY } });
-    const vidBuf = Buffer.from(await vidRes.arrayBuffer());
-    const outPath = `/tmp/leo-shot-${shotNum.padStart(2,'0')}.mp4`;
-    fs.writeFileSync(outPath, vidBuf);
-    const elapsed = Math.round((Date.now()-start)/1000);
-    console.log(`  Shot ${shotNum}: done in ${elapsed}s → ${outPath} (${(vidBuf.length/1024/1024).toFixed(1)}MB)\n`);
+  // Process in batches of 3 to avoid hammering Veo rate limits
+  const results: string[] = [];
+  for (let i = 0; i < SHOTS.length; i += 3) {
+    const batch = SHOTS.slice(i, i + 3);
+    const paths = await Promise.all(batch.map(({ shot, url }) => processShot(shot, url)));
+    for (const p of paths) { if (p) results.push(p); }
   }
 
-  console.log('All done. Videos saved to /tmp/leo-shot-*.mp4');
+  console.log(`\nDone. ${results.length}/${SHOTS.length} clips saved:`);
+  for (const p of results) console.log(`  ${p}`);
 }
 
 main().catch(console.error);
