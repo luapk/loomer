@@ -3,12 +3,11 @@ import {
   PDFDocument,
   StandardFonts,
   rgb,
-  PDFPage,
   PDFFont,
   PDFImage,
 } from 'pdf-lib';
 import { getDb } from '@/src/lib/db';
-import { ParsedStoryboardSchema } from '@/src/schema/storyboard';
+import type { ParsedStoryboard } from '@/src/schema/storyboard';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -19,15 +18,34 @@ export const maxDuration = 60;
 
 const PAGE_W = 841.89;
 const PAGE_H = 595.28;
-const MARGIN = 36;
+const MARGIN_H = 48;
+const MARGIN_TOP = 36;
+const MARGIN_BOTTOM = 30;
 
-// Stone palette
-const DARK_BG = rgb(28 / 255, 25 / 255, 23 / 255);   // stone-900 approx
-const WHITE = rgb(1, 1, 1);
-const LIGHT_GREY = rgb(0.78, 0.76, 0.74);
-const MID_GREY = rgb(0.5, 0.5, 0.5);
-const NEAR_BLACK = rgb(0.1, 0.1, 0.1);
-const PALE_GREY = rgb(0.88, 0.87, 0.86);
+const HEADER_H = 20;
+const FOOTER_H = 16;
+const SCENE_GAP = 8;
+
+const COLS = 3;
+const ROWS = 3;
+const COL_GAP = 10;
+const ROW_GAP = 10;
+
+const contentW = PAGE_W - 2 * MARGIN_H; // 745.89
+const cellW = (contentW - (COLS - 1) * COL_GAP) / COLS; // ≈241.96
+const imgH = cellW / 2.39; // ≈101.24 — cinematic 2.39:1
+
+const gridTopY =
+  PAGE_H - MARGIN_TOP - HEADER_H - SCENE_GAP - 18 - SCENE_GAP; // 505.28
+const gridBottomY = MARGIN_BOTTOM + FOOTER_H + SCENE_GAP; // 54
+const gridH = gridTopY - gridBottomY; // 451.28
+const cellH = (gridH - (ROWS - 1) * ROW_GAP) / ROWS; // ≈143.76
+
+// Colors
+const INK = rgb(0.067, 0.067, 0.067);
+const MID = rgb(0.5, 0.5, 0.5);
+const DIM = rgb(0.7, 0.7, 0.7);
+const DARK_PLACEHOLDER = rgb(0.15, 0.15, 0.15);
 
 // ============================================================================
 // Shot key frame types
@@ -52,25 +70,13 @@ function slugify(title: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Draw wrapped text, returning the y position after the last line. */
-function drawWrapped(
-  page: PDFPage,
+/** Split text into lines that fit within maxWidth using word-wrap. */
+function wrapText(
   text: string,
-  opts: {
-    x: number;
-    y: number;
-    maxWidth: number;
-    font: PDFFont;
-    size: number;
-    color: ReturnType<typeof rgb>;
-    lineHeight?: number;
-    maxLines?: number;
-  },
-): number {
-  const { x, y, maxWidth, font, size, color } = opts;
-  const lineHeight = opts.lineHeight ?? size * 1.4;
-  const maxLines = opts.maxLines ?? Infinity;
-
+  maxWidth: number,
+  font: PDFFont,
+  size: number,
+): string[] {
   const words = text.split(/\s+/);
   const lines: string[] = [];
   let current = '';
@@ -86,20 +92,7 @@ function drawWrapped(
   }
   if (current) lines.push(current);
 
-  const renderLines = lines.slice(0, maxLines);
-  // If truncated, add ellipsis to last line
-  if (lines.length > maxLines && renderLines.length > 0) {
-    const last = renderLines[renderLines.length - 1]!;
-    renderLines[renderLines.length - 1] = last.length > 3 ? last.slice(0, -3) + '…' : last + '…';
-  }
-
-  let curY = y;
-  for (const line of renderLines) {
-    page.drawText(line, { x, y: curY, size, font, color });
-    curY -= lineHeight;
-  }
-
-  return curY;
+  return lines;
 }
 
 /** Fetch a URL and return its bytes, or null on failure. */
@@ -131,332 +124,290 @@ async function embedImage(
 }
 
 // ============================================================================
-// Page 1 — Cover
-// ============================================================================
-
-function buildCoverPage(
-  pdfDoc: PDFDocument,
-  fonts: { regular: PDFFont; bold: PDFFont },
-  parsed: ReturnType<typeof ParsedStoryboardSchema.parse>,
-  shotCount: number,
-): void {
-  const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-
-  // Full-bleed dark background
-  page.drawRectangle({
-    x: 0, y: 0,
-    width: PAGE_W, height: PAGE_H,
-    color: DARK_BG,
-  });
-
-  // Title — centred, vertically centred upper half
-  const titleSize = 48;
-  const titleText = parsed.title;
-  const titleWidth = fonts.bold.widthOfTextAtSize(titleText, titleSize);
-  const titleX = Math.max(MARGIN, (PAGE_W - titleWidth) / 2);
-  const titleY = PAGE_H * 0.55; // upper half centred
-  page.drawText(titleText, {
-    x: titleX,
-    y: titleY,
-    size: titleSize,
-    font: fonts.bold,
-    color: WHITE,
-  });
-
-  // Subtitle — look field below title
-  const subtitleText = parsed.style_lock.look;
-  const subtitleSize = 24;
-  const subtitleWidth = fonts.regular.widthOfTextAtSize(subtitleText, subtitleSize);
-  const subtitleX = Math.max(MARGIN, (PAGE_W - subtitleWidth) / 2);
-  page.drawText(subtitleText, {
-    x: subtitleX,
-    y: titleY - titleSize - 20,
-    size: subtitleSize,
-    font: fonts.regular,
-    color: LIGHT_GREY,
-  });
-
-  // Bottom strip
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-  const bottomText = `Loomer  ·  ${shotCount} shots  ·  ${dateStr}`;
-  const bottomSize = 12;
-  const bottomWidth = fonts.regular.widthOfTextAtSize(bottomText, bottomSize);
-  const bottomX = Math.max(MARGIN, (PAGE_W - bottomWidth) / 2);
-  page.drawText(bottomText, {
-    x: bottomX,
-    y: MARGIN + 8,
-    size: bottomSize,
-    font: fonts.regular,
-    color: MID_GREY,
-  });
-}
-
-// ============================================================================
-// Pages 2+ — Grid pages (3×3, 9 shots per page)
+// Grid pages — 3×3, no cover, no detail pages
 // ============================================================================
 
 async function buildGridPages(
   pdfDoc: PDFDocument,
-  fonts: { regular: PDFFont; bold: PDFFont },
-  shots: ReturnType<typeof ParsedStoryboardSchema.parse>['shots'],
+  fonts: {
+    regular: PDFFont;
+    bold: PDFFont;
+    italic: PDFFont;
+  },
+  parsed: ParsedStoryboard,
   keyFrames: ShotKeyFrames,
-  title: string,
 ): Promise<void> {
-  const COLS = 3;
-  const ROWS = 3;
+  const shots = parsed.shots;
+  const title = parsed.title;
   const SHOTS_PER_PAGE = COLS * ROWS;
-  const PAGE_MARGIN = 12;
-  const GUTTER = 8;
-  const HEADER_H = 20;
 
-  const gridW = PAGE_W - PAGE_MARGIN * 2;
-  const gridH = PAGE_H - PAGE_MARGIN * 2 - HEADER_H;
-  const cellW = (gridW - GUTTER * (COLS - 1)) / COLS;
-  // 16:9 image height + metadata below
-  const imgH = cellW * (9 / 16);
-  const metaH = 32; // approx height for shot number + descriptor + dialogue
-  const cellH = (gridH - GUTTER * (ROWS - 1)) / ROWS;
+  // Include ALL shots — show placeholder for non-done shots
+  const totalPages = Math.ceil(shots.length / SHOTS_PER_PAGE);
 
-  // Gather shots with done status
-  const doneShots = shots.filter((s) => {
-    const key = String(s.shot_number);
-    const f = keyFrames[key];
-    return f && f.status === 'done' && f.url;
+  // Fetch all images in parallel up front
+  const imageMap = new Map<number, PDFImage | null>();
+  const fetchTasks = shots.map(async (shot) => {
+    const key = String(shot.shot_number);
+    const frame = keyFrames[key];
+    if (frame && frame.status === 'done' && frame.url) {
+      const bytes = await fetchBytes(frame.url);
+      if (bytes) {
+        const img = await embedImage(pdfDoc, bytes);
+        imageMap.set(shot.shot_number, img);
+        return;
+      }
+    }
+    imageMap.set(shot.shot_number, null);
   });
-
-  // Suppress unused variable warning — imgH is used below in the draw call
-  void imgH;
-
-  const totalPages = Math.ceil(doneShots.length / SHOTS_PER_PAGE);
+  await Promise.all(fetchTasks);
 
   for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
     const pageNum = pageIdx + 1;
+    const pageShots = shots.slice(
+      pageIdx * SHOTS_PER_PAGE,
+      (pageIdx + 1) * SHOTS_PER_PAGE,
+    );
 
-    // Header
+    const firstShot = pageShots[0]?.shot_number ?? pageIdx * SHOTS_PER_PAGE + 1;
+    const lastShot =
+      pageShots[pageShots.length - 1]?.shot_number ??
+      Math.min((pageIdx + 1) * SHOTS_PER_PAGE, shots.length);
+
+    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+
+    // ── Header ────────────────────────────────────────────────────────────────
+    const headerY = PAGE_H - MARGIN_TOP; // 559.28
+
+    // "LOOMER" — simulate letterspacing by drawing char-by-char
+    const loomerChars = 'LOOMER'.split('');
+    let loomerX = MARGIN_H;
+    const loomerSize = 7;
+    for (const ch of loomerChars) {
+      page.drawText(ch, {
+        x: loomerX,
+        y: headerY,
+        size: loomerSize,
+        font: fonts.bold,
+        color: INK,
+      });
+      loomerX += fonts.bold.widthOfTextAtSize(ch, loomerSize) + 1.2;
+    }
+
+    // Mono info strip after LOOMER
+    const firstShotPad = String(firstShot).padStart(2, '0');
+    const lastShotPad = String(lastShot).padStart(2, '0');
+    const infoText = `SC.${firstShotPad}-${lastShotPad} · 2.39:1 · STORYBOARD`;
+    page.drawText(infoText, {
+      x: MARGIN_H + 50,
+      y: headerY,
+      size: 7,
+      font: fonts.regular,
+      color: MID,
+    });
+
+    // Title right-aligned
+    const titleSize = 14;
+    const titleW = fonts.italic.widthOfTextAtSize(title, titleSize);
     page.drawText(title, {
-      x: PAGE_MARGIN,
-      y: PAGE_H - PAGE_MARGIN - 10,
-      size: 10,
-      font: fonts.regular,
-      color: MID_GREY,
+      x: PAGE_W - MARGIN_H - titleW,
+      y: headerY,
+      size: titleSize,
+      font: fonts.italic,
+      color: INK,
     });
-    const pageLabel = `${pageNum} / ${totalPages}`;
-    const pageLabelW = fonts.regular.widthOfTextAtSize(pageLabel, 10);
+
+    // Hairline under header
+    const hairlineY = headerY - 22;
+    page.drawLine({
+      start: { x: MARGIN_H, y: hairlineY },
+      end: { x: PAGE_W - MARGIN_H, y: hairlineY },
+      thickness: 0.5,
+      color: INK,
+    });
+
+    // ── Shot count row ────────────────────────────────────────────────────────
+    const shotRowY = hairlineY - SCENE_GAP - 14; // ≈ 505.28 - 8 - 14 = 483.28
+
+    const shotsLabel = `SHOTS ${firstShotPad}–${lastShotPad}`;
+    page.drawText(shotsLabel, {
+      x: MARGIN_H,
+      y: shotRowY,
+      size: 8,
+      font: fonts.bold,
+      color: INK,
+    });
+
+    const pageLabel = `PAGE ${pageNum} / ${totalPages}`;
+    const pageLabelW = fonts.regular.widthOfTextAtSize(pageLabel, 8);
     page.drawText(pageLabel, {
-      x: PAGE_W - PAGE_MARGIN - pageLabelW,
-      y: PAGE_H - PAGE_MARGIN - 10,
-      size: 10,
+      x: PAGE_W - MARGIN_H - pageLabelW,
+      y: shotRowY,
+      size: 8,
       font: fonts.regular,
-      color: MID_GREY,
+      color: INK,
     });
 
-    const pageShots = doneShots.slice(pageIdx * SHOTS_PER_PAGE, (pageIdx + 1) * SHOTS_PER_PAGE);
+    // Hairline across the shot count row
+    const shotsLabelW = fonts.bold.widthOfTextAtSize(shotsLabel, 8);
+    page.drawLine({
+      start: { x: MARGIN_H + shotsLabelW + 8, y: shotRowY + 3 },
+      end: { x: PAGE_W - MARGIN_H - pageLabelW - 8, y: shotRowY + 3 },
+      thickness: 0.5,
+      color: DIM,
+    });
 
+    // ── 3×3 Grid ─────────────────────────────────────────────────────────────
     for (let i = 0; i < pageShots.length; i++) {
       const shot = pageShots[i]!;
       const col = i % COLS;
       const row = Math.floor(i / COLS);
 
-      const cellX = PAGE_MARGIN + col * (cellW + GUTTER);
-      const cellY = PAGE_H - PAGE_MARGIN - HEADER_H - row * (cellH + GUTTER) - cellH;
+      const cellX = MARGIN_H + col * (cellW + COL_GAP);
+      // cellY = top of cell in pdf-lib y coords (y=0 at bottom)
+      const cellTopY = gridTopY - row * (cellH + ROW_GAP);
+      const cellBottomY = cellTopY - cellH;
 
-      const key = String(shot.shot_number);
-      const frame = keyFrames[key];
+      // 1. Meta row (height 10pt) at top of cell
+      const metaY = cellTopY - 8; // baseline of meta text
 
-      if (frame?.url) {
-        // Draw image
-        const bytes = await fetchBytes(frame.url);
-        if (bytes) {
-          const img = await embedImage(pdfDoc, bytes);
-          if (img) {
-            const drawImgH = Math.min(cellW * (9 / 16), cellH - metaH);
-            page.drawImage(img, {
-              x: cellX,
-              y: cellY + cellH - drawImgH,
-              width: cellW,
-              height: drawImgH,
-            });
-          } else {
-            // Grey placeholder
-            page.drawRectangle({ x: cellX, y: cellY + metaH, width: cellW, height: cellH - metaH, color: PALE_GREY });
-          }
-        } else {
-          page.drawRectangle({ x: cellX, y: cellY + metaH, width: cellW, height: cellH - metaH, color: PALE_GREY });
-        }
-      } else {
-        page.drawRectangle({ x: cellX, y: cellY + metaH, width: cellW, height: cellH - metaH, color: PALE_GREY });
-      }
+      const shotNum = String(shot.shot_number).padStart(2, '0');
+      page.drawText(shotNum, {
+        x: cellX,
+        y: metaY,
+        size: 8,
+        font: fonts.bold,
+        color: INK,
+      });
 
-      // Shot label below image
-      const shotLabel = `${String(shot.shot_number).padStart(2, '0')}  ${shot.descriptor}`;
-      page.drawText(
-        shotLabel.length > 40 ? shotLabel.slice(0, 39) + '…' : shotLabel,
-        { x: cellX, y: cellY + metaH - 12, size: 8, font: fonts.bold, color: NEAR_BLACK },
-      );
-
-      // Dialogue if present
-      if (shot.dialogue_vo) {
-        drawWrapped(page, `"${shot.dialogue_vo}"`, {
-          x: cellX,
-          y: cellY + metaH - 24,
-          maxWidth: cellW,
-          font: fonts.regular,
-          size: 7,
-          color: MID_GREY,
-          maxLines: 2,
-        });
-      }
-    }
-  }
-}
-
-// ============================================================================
-// Detail pages — one shot per page, landscape two-column
-// ============================================================================
-
-async function buildDetailPages(
-  pdfDoc: PDFDocument,
-  fonts: { regular: PDFFont; bold: PDFFont; oblique: PDFFont },
-  shots: ReturnType<typeof ParsedStoryboardSchema.parse>['shots'],
-  keyFrames: ShotKeyFrames,
-  totalDetailPages: number,
-  characterIndex: Map<string, string>,
-): Promise<void> {
-  const LEFT_FRAC = 0.55;
-  const imgColW = (PAGE_W - MARGIN * 2) * LEFT_FRAC;
-  const metaColX = MARGIN + imgColW + 20;
-  const metaColW = PAGE_W - metaColX - MARGIN;
-
-  const doneShots = shots.filter((s) => {
-    const key = String(s.shot_number);
-    const f = keyFrames[key];
-    return f && f.status === 'done' && f.url;
-  });
-
-  for (let i = 0; i < doneShots.length; i++) {
-    const shot = doneShots[i]!;
-    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-    const pageNum = i + 1;
-
-    // Left column: image
-    const key = String(shot.shot_number);
-    const frame = keyFrames[key];
-    const imgAreaH = PAGE_H - MARGIN * 2;
-    const imgAreaW = imgColW;
-
-    if (frame?.url) {
-      const bytes = await fetchBytes(frame.url);
-      if (bytes) {
-        const img = await embedImage(pdfDoc, bytes);
-        if (img) {
-          // Scale image to fill left column maintaining aspect ratio
-          const scale = Math.min(imgAreaW / img.width, imgAreaH / img.height);
-          const drawW = img.width * scale;
-          const drawH = img.height * scale;
-          const drawX = MARGIN + (imgAreaW - drawW) / 2;
-          const drawY = MARGIN + (imgAreaH - drawH) / 2;
-          page.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
-        } else {
-          page.drawRectangle({ x: MARGIN, y: MARGIN, width: imgAreaW, height: imgAreaH, color: PALE_GREY });
-        }
-      } else {
-        page.drawRectangle({ x: MARGIN, y: MARGIN, width: imgAreaW, height: imgAreaH, color: PALE_GREY });
-      }
-    } else {
-      page.drawRectangle({ x: MARGIN, y: MARGIN, width: imgAreaW, height: imgAreaH, color: PALE_GREY });
-    }
-
-    // Right column: metadata
-    let y = PAGE_H - MARGIN;
-
-    // Shot number + descriptor
-    const shotLabel = `Shot ${String(shot.shot_number).padStart(2, '0')}  —  ${shot.descriptor}`;
-    y = drawWrapped(page, shotLabel, {
-      x: metaColX,
-      y,
-      maxWidth: metaColW,
-      font: fonts.bold,
-      size: 14,
-      color: NEAR_BLACK,
-    });
-
-    y -= 8;
-
-    // Function
-    y = drawWrapped(page, shot.function, {
-      x: metaColX,
-      y,
-      maxWidth: metaColW,
-      font: fonts.oblique,
-      size: 10,
-      color: MID_GREY,
-    });
-
-    y -= 12;
-
-    // Grammar fields in monospace style
-    const grammarFields: [string, string | undefined | null][] = [
-      ['Scale', shot.grammar.scale],
-      ['Lens', shot.grammar.lens],
-      ['Angle', shot.grammar.angle],
-      ['Move', shot.grammar.camera_move],
-      ['Direction', shot.grammar.screen_direction],
-    ];
-
-    for (const [label, value] of grammarFields) {
-      if (!value) continue;
-      const line = `${label}:  ${value}`;
-      page.drawText(line, {
-        x: metaColX,
-        y,
-        size: 9,
+      // Descriptor truncated to 30 chars — centred
+      const descText =
+        shot.descriptor.length > 30
+          ? shot.descriptor.slice(0, 30)
+          : shot.descriptor;
+      const descW = fonts.regular.widthOfTextAtSize(descText, 7);
+      page.drawText(descText, {
+        x: cellX + (cellW - descW) / 2,
+        y: metaY,
+        size: 7,
         font: fonts.regular,
-        color: MID_GREY,
+        color: MID,
       });
-      y -= 13;
-    }
 
-    y -= 8;
-
-    // Dialogue / VO
-    if (shot.dialogue_vo) {
-      y = drawWrapped(page, `"${shot.dialogue_vo}"`, {
-        x: metaColX,
-        y,
-        maxWidth: metaColW,
-        font: fonts.oblique,
-        size: 9,
-        color: NEAR_BLACK,
+      // Scale + lens — right-aligned
+      const scaleLens = `${shot.grammar.scale} · ${shot.grammar.lens}`;
+      const scaleLensW = fonts.regular.widthOfTextAtSize(scaleLens, 7);
+      page.drawText(scaleLens, {
+        x: cellX + cellW - scaleLensW,
+        y: metaY,
+        size: 7,
+        font: fonts.regular,
+        color: MID,
       });
-      y -= 8;
-    }
 
-    // Continuity characters
-    if (shot.continuity?.characters && shot.continuity.characters.length > 0) {
-      page.drawText('Characters:', {
-        x: metaColX, y, size: 9, font: fonts.bold, color: MID_GREY,
+      // 2. Image area (imgH tall), below meta row with 3pt gap
+      const imageTopY = cellTopY - 10 - 3;
+      const imageBottomY = imageTopY - imgH;
+
+      // Dark grey placeholder
+      page.drawRectangle({
+        x: cellX,
+        y: imageBottomY,
+        width: cellW,
+        height: imgH,
+        color: DARK_PLACEHOLDER,
       });
-      y -= 13;
-      for (const charId of shot.continuity.characters) {
-        const charName = characterIndex.get(charId) ?? charId;
-        page.drawText(`· ${charName}`, {
-          x: metaColX + 8, y, size: 9, font: fonts.regular, color: MID_GREY,
+
+      // Draw image over placeholder if available
+      const img = imageMap.get(shot.shot_number);
+      if (img) {
+        page.drawImage(img, {
+          x: cellX,
+          y: imageBottomY,
+          width: cellW,
+          height: imgH,
         });
-        y -= 12;
+      }
+
+      // 3. Action line below image
+      let textCursorY = imageBottomY - 3;
+      const actionLines = wrapText(shot.action_beat, cellW, fonts.regular, 7.5);
+      const actionRender = actionLines.slice(0, 2);
+      for (const line of actionRender) {
+        page.drawText(line, {
+          x: cellX,
+          y: textCursorY,
+          size: 7.5,
+          font: fonts.regular,
+          color: rgb(0.2, 0.2, 0.2),
+        });
+        textCursorY -= 10;
+      }
+
+      // 4. Dialogue if present
+      if (shot.dialogue_vo) {
+        textCursorY -= 2;
+        const dialogueText = `"${shot.dialogue_vo.toUpperCase()}"`;
+        const dialogueLines = wrapText(dialogueText, cellW, fonts.bold, 6.5);
+        const dialogueRender = dialogueLines.slice(0, 2);
+        for (const line of dialogueRender) {
+          // Guard: don't draw below cell bottom
+          if (textCursorY < cellBottomY) break;
+          page.drawText(line, {
+            x: cellX,
+            y: textCursorY,
+            size: 6.5,
+            font: fonts.bold,
+            color: rgb(0.5, 0.5, 0.5),
+          });
+          textCursorY -= 9;
+        }
       }
     }
 
-    // Page number — bottom right
-    const pageLabel = `${pageNum} / ${totalDetailPages}`;
-    const pageLabelW = fonts.regular.widthOfTextAtSize(pageLabel, 9);
-    page.drawText(pageLabel, {
-      x: PAGE_W - MARGIN - pageLabelW,
-      y: MARGIN - 16,
-      size: 9,
+    // ── Footer ────────────────────────────────────────────────────────────────
+    const footerHairlineY = MARGIN_BOTTOM + FOOTER_H; // 46
+    page.drawLine({
+      start: { x: MARGIN_H, y: footerHairlineY },
+      end: { x: PAGE_W - MARGIN_H, y: footerHairlineY },
+      thickness: 0.5,
+      color: INK,
+    });
+
+    const footerTextY = MARGIN_BOTTOM + 4; // baseline below hairline
+
+    // Left: storyboard title in grey
+    page.drawText(title, {
+      x: MARGIN_H,
+      y: footerTextY,
+      size: 7,
       font: fonts.regular,
-      color: LIGHT_GREY,
+      color: MID,
+    });
+
+    // Center: today's date
+    const dateStr = new Date().toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    const dateW = fonts.regular.widthOfTextAtSize(dateStr, 7);
+    page.drawText(dateStr, {
+      x: (PAGE_W - dateW) / 2,
+      y: footerTextY,
+      size: 7,
+      font: fonts.regular,
+      color: MID,
+    });
+
+    // Right: "● PAGE X / Y"
+    const footerRight = `● PAGE ${pageNum} / ${totalPages}`;
+    const footerRightW = fonts.bold.widthOfTextAtSize(footerRight, 7);
+    page.drawText(footerRight, {
+      x: PAGE_W - MARGIN_H - footerRightW,
+      y: footerTextY,
+      size: 7,
+      font: fonts.bold,
+      color: INK,
     });
   }
 }
@@ -478,35 +429,20 @@ export async function GET(
     return Response.json({ error: 'Storyboard not found' }, { status: 404 });
   }
 
-  if (!row.shot_key_frames) {
+  // Use type assertion — the stored JSON may not pass Zod due to schema evolution
+  const parsed = row.parsed_json as unknown as ParsedStoryboard;
+
+  if (!parsed?.shots?.length) {
     return Response.json(
-      { error: 'No shots generated yet', code: 'NO_SHOTS' },
+      { error: 'Storyboard has no shots', code: 'NO_SHOTS' },
       { status: 422 },
     );
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const keyFrames = row.shot_key_frames as any as ShotKeyFrames;
-
-  const doneCount = Object.values(keyFrames).filter(
-    (f) => f.status === 'done' && f.url,
-  ).length;
-
-  if (doneCount === 0) {
-    return Response.json(
-      { error: 'No shots generated yet', code: 'NO_SHOTS' },
-      { status: 422 },
-    );
-  }
-
-  const parseResult = ParsedStoryboardSchema.safeParse(row.parsed_json);
-  if (!parseResult.success) {
-    return Response.json(
-      { error: 'Storyboard parse data is invalid', details: parseResult.error.flatten() },
-      { status: 500 },
-    );
-  }
-  const parsed = parseResult.data;
+  // key frames may be null if generation hasn't started — use empty record
+  const keyFrames: ShotKeyFrames = row.shot_key_frames
+    ? (row.shot_key_frames as unknown as ShotKeyFrames)
+    : {};
 
   // ── Build PDF ──────────────────────────────────────────────────────────────
 
@@ -514,36 +450,15 @@ export async function GET(
 
   const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const oblique = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const italic = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
 
-  // Page 1: Cover
-  buildCoverPage(pdfDoc, { regular, bold }, parsed, doneCount);
-
-  // Pages 2+: Grid (3×3)
-  await buildGridPages(pdfDoc, { regular, bold }, parsed.shots, keyFrames, parsed.title);
-
-  // Detail pages
-  const doneShots = parsed.shots.filter((s) => {
-    const key = String(s.shot_number);
-    const f = keyFrames[key];
-    return f && f.status === 'done' && f.url;
-  });
-
-  const characterIndex = new Map(parsed.characters.map((c) => [c.id, c.name]));
-  await buildDetailPages(
-    pdfDoc,
-    { regular, bold, oblique },
-    parsed.shots,
-    keyFrames,
-    doneShots.length,
-    characterIndex,
-  );
+  await buildGridPages(pdfDoc, { regular, bold, italic }, parsed, keyFrames);
 
   const pdfBytes = await pdfDoc.save();
 
   const filename = `${slugify(parsed.title || row.title)}.pdf`;
 
-  return new Response(Buffer.from(pdfBytes), {
+  return new Response(new Uint8Array(pdfBytes), {
     status: 200,
     headers: {
       'Content-Type': 'application/pdf',
