@@ -29,8 +29,11 @@ export async function POST(
 
   const readable = new ReadableStream({
     async start(controller) {
-      const send = (obj: Record<string, unknown>) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      // Swallow enqueue errors — client may have disconnected but parsing should
+      // complete and save to DB regardless, so reopening shows the result.
+      const send = (obj: Record<string, unknown>) => {
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* client gone */ }
+      };
 
       // SSE comment sent every 10s — keeps the connection alive during gaps
       // between inputJson events so Vercel doesn't drop the idle stream.

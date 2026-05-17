@@ -7,6 +7,15 @@ import Link from 'next/link';
 import { FilmIcon, Plus, ExternalLink } from 'lucide-react';
 import { StoryboardRowActions } from './StoryboardRowActions';
 
+function toTitleCase(str: string): string {
+  const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
+  return str
+    .toLowerCase()
+    .replace(/[^\s-]+/g, (word, offset) =>
+      offset === 0 || !minors.has(word) ? word.charAt(0).toUpperCase() + word.slice(1) : word
+    );
+}
+
 const STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'outline' | 'success' | 'warning' | 'error' }> = {
   DRAFT: { label: 'Draft', variant: 'outline' },
   PARSED: { label: 'Parsed', variant: 'success' },
@@ -33,7 +42,7 @@ export default async function ListPage() {
     <div className="max-w-3xl mx-auto px-6 py-12 space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">Archive</h1>
+          <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">Projects</h1>
           <p className="mt-1 text-stone-500 text-sm">{storyboards.length} total</p>
         </div>
         <Button asChild>
@@ -63,7 +72,7 @@ export default async function ListPage() {
             return (
               <div key={sb.id} className="glass rounded-2xl p-5 flex items-center justify-between gap-4 hover:bg-white/70 transition-colors">
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-medium text-stone-900 truncate">{sb.title}</h3>
+                  <h3 className="font-medium text-stone-900 truncate">{toTitleCase(sb.title)}</h3>
                   <p className="text-xs text-stone-400 font-mono mt-0.5">
                     {sb.created_at.toLocaleDateString('en-GB', {
                       day: 'numeric',

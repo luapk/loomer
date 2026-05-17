@@ -151,8 +151,11 @@ export async function POST(
 
   const readable = new ReadableStream({
     async start(controller) {
-      const send = (obj: Record<string, unknown>) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      // Silent send — if browser disconnects the enqueue throws; we swallow it
+      // so background DB writes continue regardless of client connection state.
+      const send = (obj: Record<string, unknown>) => {
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* disconnected */ }
+      };
 
       const heartbeat = setInterval(() => {
         try { controller.enqueue(encoder.encode(': heartbeat\n\n')); } catch { /* closed */ }

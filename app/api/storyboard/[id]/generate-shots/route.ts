@@ -174,8 +174,9 @@ export async function POST(
 
   const readable = new ReadableStream({
     async start(controller) {
-      const send = (obj: Record<string, unknown>) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+      const send = (obj: Record<string, unknown>) => {
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* disconnected */ }
+      };
 
       const heartbeat = setInterval(() => {
         try {

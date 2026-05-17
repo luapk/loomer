@@ -7,9 +7,18 @@ import { Textarea } from '@/src/components/ui/textarea';
 import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
-  Camera, Paintbrush, ChevronDown, Check, ImageIcon,
-  Film, Download, ScanEye,
+  Camera, Paintbrush, Check, ImageIcon,
+  Film, Download, ScanEye, Pencil, Bell, BellOff,
 } from 'lucide-react';
+
+function toTitleCase(str: string): string {
+  const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
+  return str
+    .toLowerCase()
+    .replace(/[^\s-]+/g, (word, offset) =>
+      offset === 0 || !minors.has(word) ? word.charAt(0).toUpperCase() + word.slice(1) : word
+    );
+}
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
@@ -19,7 +28,7 @@ import type { DevStats } from '@/src/components/dev-stats';
 import { RegenShotButton } from './RegenShotButton';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
-type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'json';
+type Tab = 'storyboard' | 'shots' | 'images' | 'boards';
 
 type State =
   | { phase: 'empty' }
@@ -85,7 +94,7 @@ function HomePageInner() {
   const [state, setState] = useState<State>({ phase: 'empty' });
 
   const [renderStyle, setRenderStyle] = useState<RenderStyle>('PHOTOREAL');
-  const [imageModel, setImageModel] = useState<string>('nano-banana-pro-preview');
+  const [imageModel, setImageModel] = useState<string>('gemini-2.5-flash-image');
   const [availableModels, setAvailableModels] = useState<ImageModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -102,6 +111,10 @@ function HomePageInner() {
   const [continuityIssues, setContinuityIssues] = useState<ContinuityIssue[]>([]);
   const [continuityChecking, setContinuityChecking] = useState(false);
   const [continuitySummary, setContinuitySummary] = useState<string | null>(null);
+  const [continuityRectifying, setContinuityRectifying] = useState<Set<number>>(new Set());
+  const continuityAutoFixDone = useRef(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [notifyWhenDone, setNotifyWhenDone] = useState(false);
 
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
@@ -136,6 +149,15 @@ function HomePageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
+  // Open "How it works" modal when ?how=1 is in the URL
+  useEffect(() => {
+    if (searchParams.get('how') === '1') {
+      setShowHowItWorks(true);
+      router.replace('/');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Hydrate from an existing storyboard record when ?sb={id} is in the URL.
   useEffect(() => {
     const sbId = searchParams.get('sb');
@@ -159,7 +181,7 @@ function HomePageInner() {
         if (data.render_style) setRenderStyle(data.render_style);
         // Only restore the saved model if it's a known-good ID — stale records may
         // have the old non-existent 'gemini-2.0-flash-preview-image-generation' name.
-        const KNOWN_IMAGE_MODELS = ['nano-banana-pro-preview', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image'];
+        const KNOWN_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'];
         if (data.image_model && KNOWN_IMAGE_MODELS.includes(data.image_model)) {
           setImageModel(data.image_model);
         }
@@ -341,6 +363,7 @@ function HomePageInner() {
             setState((prev) =>
               prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
             );
+            if (notifyWhenDone) playChime();
           }
         }
       }
@@ -373,6 +396,9 @@ function HomePageInner() {
     );
     setShotsGenerating(true);
     setShotKeyFrames({});
+    setContinuityIssues([]);
+    setContinuitySummary(null);
+    continuityAutoFixDone.current = false;
     setActiveTab('boards');
 
     let res: Response;
@@ -421,6 +447,7 @@ function HomePageInner() {
           } else if (payload['type'] === 'done') {
             setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'shots_done' } : prev));
             setShotsGenerating(false);
+            if (notifyWhenDone) playChime();
           }
         }
       }
@@ -430,6 +457,73 @@ function HomePageInner() {
       setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'shots_done' } : prev));
       setShotsGenerating(false);
     }
+    // Auto continuity pass — one attempt only, runs right after first board generation
+    if (!continuityAutoFixDone.current) {
+      continuityAutoFixDone.current = true;
+      await runContinuityCheck(id, true);
+    }
+  }
+
+  async function runContinuityCheck(id: string, autoFix: boolean) {
+    setContinuityChecking(true);
+    setContinuityIssues([]);
+    setContinuitySummary(null);
+    try {
+      const res = await fetch(`/api/storyboard/${id}/check-continuity`, { method: 'POST' });
+      if (!res.ok) return;
+      const data = await res.json() as ContinuityCheckResult;
+      setContinuityIssues(data.issues);
+      setContinuitySummary(data.summary);
+
+      if (autoFix && data.issues.length > 0) {
+        const shotNumbers = [...new Set(data.issues.map((i) => i.shot_number))];
+        setContinuityRectifying(new Set(shotNumbers));
+        await Promise.all(
+          shotNumbers.map(async (shotNumber) => {
+            try {
+              const r = await fetch(`/api/storyboard/${id}/regen-shot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shotNumber, variations: [] }),
+              });
+              if (r.ok) {
+                const d = await r.json() as { url: string };
+                setShotKeyFrames((prev) => ({ ...prev, [String(shotNumber)]: { status: 'done', url: d.url } }));
+                setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== shotNumber));
+              }
+            } catch { /* ignore per-shot errors */ }
+            setContinuityRectifying((prev) => {
+              const next = new Set(prev);
+              next.delete(shotNumber);
+              return next;
+            });
+          }),
+        );
+        setContinuitySummary('Continuity corrected.');
+      }
+    } finally {
+      setContinuityChecking(false);
+    }
+  }
+
+  function playChime() {
+    try {
+      const ctx = new AudioContext();
+      const times = [0, 0.18, 0.36];
+      const freqs = [880, 1108, 1320];
+      times.forEach((t, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.value = freqs[i]!;
+        gain.gain.setValueAtTime(0, ctx.currentTime + t);
+        gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + t + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.9);
+        osc.start(ctx.currentTime + t);
+        osc.stop(ctx.currentTime + t + 0.9);
+      });
+    } catch { /* AudioContext may be blocked */ }
   }
 
   async function doParse(id: string, title: string, markdown: string) {
@@ -539,7 +633,14 @@ function HomePageInner() {
         }
       } catch { /* ignore recovery errors, fall through to error state */ }
       setState({ phase: 'error', message: 'Lost connection during parse. Please try again.' });
+      return;
     }
+    // Stream closed without done/error event
+    setState((prev) =>
+      prev.phase === 'parsing'
+        ? { phase: 'error', message: 'Parse timed out. Please try again.' }
+        : prev,
+    );
   }
 
   async function generate() {
@@ -622,6 +723,12 @@ function HomePageInner() {
     } catch {
       setState({ phase: 'error', message: 'Lost connection to server mid-generation.' });
     }
+    // Stream closed without a done/error event (Vercel timeout or premature close)
+    setState((prev) =>
+      prev.phase === 'generating'
+        ? { phase: 'error', message: 'Generation timed out. Please try again — subsequent runs are faster once the prompt is cached.' }
+        : prev,
+    );
   }
 
   const isGenerating = state.phase === 'generating';
@@ -639,28 +746,35 @@ function HomePageInner() {
   const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done' ||
     state.phase === 'generating_shots' || state.phase === 'shots_done';
   const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done';
-  const hasJson = isLoaded;
+
+  // Completion state for green tick icons
+  const storyboardComplete = isLoaded;
+  const shotsComplete = isLoaded;
+  const imagesComplete = totalEntities > 0 && approvedCount === totalEntities;
+  const boardsComplete = state.phase === 'shots_done';
 
   const tabDefs = [
-    { id: 'storyboard' as Tab, label: 'Storyboard', enabled: hasStoryboard },
+    { id: 'storyboard' as Tab, label: 'Script Analysis', enabled: hasStoryboard, done: storyboardComplete },
     {
       id: 'shots' as Tab,
       label: isLoaded ? `Shot list (${(state as { parsedJson: { shots?: unknown[] } }).parsedJson?.shots?.length ?? 0})` : 'Shot list',
       enabled: hasShots,
+      done: shotsComplete,
     },
     {
       id: 'images' as Tab,
       label: totalEntities > 0 ? `Stills ${approvedCount}/${totalEntities}` : 'Stills',
       enabled: hasImages,
       spinner: state.phase === 'generating_refs',
+      done: imagesComplete,
     },
     {
       id: 'boards' as Tab,
       label: shotsTotal > 0 ? `Boards ${shotsDone}/${shotsTotal}` : 'Boards',
       enabled: hasBoards,
       spinner: shotsGenerating,
+      done: boardsComplete,
     },
-    { id: 'json' as Tab, label: 'JSON', enabled: hasJson },
   ];
 
   return (
@@ -668,18 +782,29 @@ function HomePageInner() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">
-            {isLoaded && 'title' in state ? state.title
-              : (isGenerating || isParsing) && 'title' in state && state.title ? state.title
-              : 'New storyboard'}
+          <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
+            {isLoaded && 'title' in state ? toTitleCase(state.title)
+              : (isGenerating || isParsing) && 'title' in state && state.title ? toTitleCase(state.title)
+              : <em>Storyboards that feel like film.</em>}
           </h1>
           {state.phase === 'empty' && (
-            <p className="mt-1 text-stone-500 text-sm">
-              Paste a script, premise, or beat list. The storyboard skill handles the rest.
-            </p>
+            <div className="mt-3 space-y-3" style={{ maxWidth: 480 }}>
+              <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 16, lineHeight: 1.55, color: 'var(--ink-mid)', fontStyle: 'italic' }}>
+                Paste a script, premise, or beat list — Loomer handles the rest.
+              </p>
+              <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, lineHeight: 1.5, color: 'var(--ink-dim)' }}>
+                Paste a script, premise, or beat list — Loomer breaks it into shots, sources reference stills, and renders cinematic key frames ready for client delivery.
+              </p>
+              <button
+                onClick={() => setShowHowItWorks(true)}
+                style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--ink-low)', textDecoration: 'underline', textUnderlineOffset: 3, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                How it works
+              </button>
+            </div>
           )}
           {'id' in state && (
-            <p className="text-xs text-stone-400 font-mono mt-1">ID: {state.id}</p>
+            <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--ink-dim)', marginTop: 6 }}>ID: {state.id}</p>
           )}
         </div>
         {isLoaded && 'warnings' in state && (
@@ -693,23 +818,41 @@ function HomePageInner() {
       </div>
 
       {/* ── Tab bar — always visible ── */}
-      <div className="flex gap-1 border-b border-stone-200">
+      <div className="flex" style={{ borderBottom: '1px solid var(--ink)' }}>
         {tabDefs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => tab.enabled && setActiveTab(tab.id)}
             aria-disabled={!tab.enabled}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-colors relative select-none ${
-              !tab.enabled
-                ? 'text-stone-300 cursor-not-allowed'
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10,
+              letterSpacing: '0.16em',
+              textTransform: 'uppercase',
+              padding: '10px 16px',
+              position: 'relative',
+              userSelect: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'color 0.15s',
+              color: !tab.enabled
+                ? 'var(--ink-ghost)'
                 : activeTab === tab.id
-                  ? 'text-stone-900 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-stone-900'
-                  : 'text-stone-500 hover:text-stone-700 cursor-pointer'
-            }`}
+                  ? 'var(--ink)'
+                  : 'var(--ink-low)',
+              cursor: !tab.enabled ? 'not-allowed' : 'pointer',
+              marginBottom: -1,
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === tab.id ? '2px solid var(--ink)' : '2px solid transparent',
+            }}
           >
-            {'spinner' in tab && tab.spinner && (
+            {'spinner' in tab && tab.spinner ? (
               <Loader2 className="h-3 w-3 animate-spin" />
-            )}
+            ) : ('done' in tab && tab.done && activeTab !== tab.id) ? (
+              <CheckCircle2 style={{ width: 11, height: 11, color: '#3a9a5c', flexShrink: 0 }} />
+            ) : null}
             {tab.label}
           </button>
         ))}
@@ -771,23 +914,39 @@ function HomePageInner() {
                   className="w-full appearance-none rounded-lg border border-stone-200 bg-white px-3 py-2 pr-8 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {availableModels.map((m) => (
-                    <option key={m.id} value={m.id}>{m.label} — {m.description}</option>
+                    <option key={m.id} value={m.id}>
+                      {m.label} — {m.description}
+                    </option>
                   ))}
                 </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-stone-400" />
+                <svg className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
               </div>
             )}
           </div>
 
           {/* Action row */}
           <div className="flex items-center justify-between pt-1 flex-wrap gap-3">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
-            >
-              New storyboard
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
+              >
+                New storyboard
+              </Button>
+              <button
+                type="button"
+                onClick={() => setNotifyWhenDone((v) => !v)}
+                title={notifyWhenDone ? 'Notifications on — click to disable' : 'Notify me when done'}
+                className={`h-8 w-8 flex items-center justify-center rounded-lg border transition-colors ${
+                  notifyWhenDone
+                    ? 'border-stone-900 bg-stone-900 text-white'
+                    : 'border-stone-200 bg-white text-stone-400 hover:border-stone-400 hover:text-stone-700'
+                }`}
+              >
+                {notifyWhenDone ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
+              </button>
+            </div>
             <div className="flex items-center gap-2 flex-wrap">
               {/* Ref generation */}
               {state.phase === 'generating_refs' ? (
@@ -861,7 +1020,7 @@ function HomePageInner() {
               />
               <div className="flex items-center justify-between">
                 <span className="text-xs text-stone-400">
-                  {script.length > 0 ? `${script.length} chars` : "Tip: include the word \"storyboard\" if the skill doesn't trigger"}
+                  {script.length > 0 ? `${script.length} chars` : ''}
                 </span>
                 <Button onClick={() => { void generate(); }} disabled={!script.trim()}>
                   Generate storyboard
@@ -988,6 +1147,12 @@ function HomePageInner() {
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
             }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
+            }}
           />
           <EntitySection
             title="Locations"
@@ -998,6 +1163,12 @@ function HomePageInner() {
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
             }}
           />
           <EntitySection
@@ -1010,6 +1181,12 @@ function HomePageInner() {
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
             }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
+            }}
           />
         </div>
       )}
@@ -1021,21 +1198,9 @@ function HomePageInner() {
           {shotsTotal > 0 && (
             <div className="flex items-center gap-3">
               <button
-                onClick={async () => {
+                onClick={() => {
                   if (!('id' in state)) return;
-                  setContinuityChecking(true);
-                  setContinuityIssues([]);
-                  setContinuitySummary(null);
-                  try {
-                    const res = await fetch(`/api/storyboard/${state.id}/check-continuity`, { method: 'POST' });
-                    if (res.ok) {
-                      const data = await res.json() as ContinuityCheckResult;
-                      setContinuityIssues(data.issues);
-                      setContinuitySummary(data.summary);
-                    }
-                  } finally {
-                    setContinuityChecking(false);
-                  }
+                  void runContinuityCheck(state.id, true);
                 }}
                 disabled={continuityChecking}
                 className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors disabled:opacity-50 bg-white/40"
@@ -1049,6 +1214,16 @@ function HomePageInner() {
                 <span className={`text-xs ${continuityIssues.length === 0 ? 'text-green-700' : 'text-amber-700'}`}>
                   {continuitySummary}
                 </span>
+              )}
+              {'id' in state && Object.values(shotKeyFrames).some((f) => f.status === 'done' && f.url) && (
+                <a
+                  href={`/api/storyboard/${state.id}/download-zip`}
+                  download
+                  className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors bg-white/40"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download ZIP
+                </a>
               )}
               {continuityIssues.length > 0 && (
                 <button
@@ -1099,8 +1274,17 @@ function HomePageInner() {
                       )}
                     </div>
                   )}
+                  {/* Rectifying continuity overlay */}
+                  {continuityRectifying.has(shot.shot_number as number) && (
+                    <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="h-5 w-5 animate-spin text-white" />
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'white' }}>
+                        Rectifying continuity
+                      </span>
+                    </div>
+                  )}
                   {/* Regen button — only show once there is a frame (done or error) */}
-                  {'id' in state && (frame?.status === 'done' || frame?.status === 'error') && (
+                  {'id' in state && !continuityRectifying.has(shot.shot_number as number) && (frame?.status === 'done' || frame?.status === 'error') && (
                     <div className="absolute top-2 right-2">
                       <RegenShotButton
                         storyboardId={state.id}
@@ -1154,14 +1338,54 @@ function HomePageInner() {
         </div>
       )}
 
-      {/* JSON tab */}
-      {activeTab === 'json' && isLoaded && 'parsedJson' in state && (
-        <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[700px] whitespace-pre leading-relaxed border border-stone-100">
-          {JSON.stringify(state.parsedJson, null, 2)}
-        </pre>
-      )}
 
-      <DevStatsPanel stats={devStats} />
+      {/* How It Works modal */}
+      {showHowItWorks && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-6"
+          style={{ background: 'rgba(0,0,0,0.55)' }}
+          onClick={() => setShowHowItWorks(false)}
+        >
+          <div
+            className="bg-[var(--paper)] max-w-lg w-full"
+            style={{ border: '1px solid var(--ink)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: '1px solid var(--ink)' }}>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.22em', textTransform: 'uppercase', color: 'var(--ink)' }}>
+                How it works
+              </span>
+              <button onClick={() => setShowHowItWorks(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-dim)', fontSize: 18, lineHeight: 1 }}>✕</button>
+            </div>
+            {/* Steps */}
+            <div className="px-8 py-6 space-y-6">
+              {([
+                { icon: '01', title: 'Paste your script', body: 'Drop in a screenplay, treatment, or rough beat list. Loomer reads it as a director would.' },
+                { icon: '02', title: 'Review the shot list', body: 'The storyboard skill breaks your story into a precise shot list — scale, lens, movement, and continuity all accounted for.' },
+                { icon: '03', title: 'Approve reference stills', body: 'Gemini generates candidate stills for each character, location, and prop. Pick the ones that match your vision, or fine-tune with director\'s notes.' },
+                { icon: '04', title: 'Generate key frames', body: 'With references locked in, Loomer renders a cinematic key frame for every shot — ready to download as a ZIP or export as a polished PDF contact sheet.' },
+              ] as const).map((step) => (
+                <div key={step.icon} className="flex gap-5 items-start">
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--ink-ghost)', flexShrink: 0, paddingTop: 2 }}>{step.icon}</span>
+                  <div>
+                    <p style={{ fontFamily: "'Instrument Serif', Georgia, serif", fontSize: 16, color: 'var(--ink)', marginBottom: 4 }}>{step.title}</p>
+                    <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 13, lineHeight: 1.55, color: 'var(--ink-dim)' }}>{step.body}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-8 pb-6">
+              <button
+                onClick={() => setShowHowItWorks(false)}
+                style={{ background: '#111', color: '#fff', fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', border: 'none', padding: '10px 20px', cursor: 'pointer', width: '100%' }}
+              >
+                Got it — let&apos;s make a storyboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1174,15 +1398,21 @@ function EntityCard({
   storyboardId,
   onApprove,
   onUploaded,
+  onFineTuned,
 }: {
   entity: { id: string; name: string };
   still: ReferenceStills[string] | undefined;
   storyboardId: string;
   onApprove: (entityId: string, url: string) => void;
   onUploaded: (entityId: string, url: string, candidates: string[]) => void;
+  onFineTuned: (entityId: string, candidates: string[]) => void;
 }) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fineTuneOpen, setFineTuneOpen] = useState(false);
+  const [fineTuneNotes, setFineTuneNotes] = useState('');
+  const [fineTuning, setFineTuning] = useState(false);
+  const [fineTuneError, setFineTuneError] = useState<string | null>(null);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -1200,6 +1430,30 @@ function EntityCard({
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleFineTune() {
+    setFineTuning(true);
+    setFineTuneError(null);
+    try {
+      const res = await fetch(`/api/storyboard/${storyboardId}/regen-ref`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entityId: entity.id, notes: fineTuneNotes }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        throw new Error(err.error ?? 'Fine-tune failed');
+      }
+      const data = await res.json() as { candidates: string[] };
+      onFineTuned(entity.id, data.candidates);
+      setFineTuneOpen(false);
+      setFineTuneNotes('');
+    } catch (err) {
+      setFineTuneError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setFineTuning(false);
     }
   }
 
@@ -1229,18 +1483,85 @@ function EntityCard({
             onChange={handleUpload}
           />
           {!hasError && (
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
-              title="Upload your own reference image"
-            >
-              {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
-              Upload
-            </button>
+            <>
+              <button
+                onClick={() => { setFineTuneOpen((v) => !v); setFineTuneError(null); }}
+                disabled={fineTuning}
+                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+                title="Fine-tune with director's notes"
+              >
+                <Pencil className="h-3 w-3" />
+                Fine-tune
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+                title="Upload your own reference image"
+              >
+                {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+                Upload
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {/* Fine-tune inline form */}
+      {fineTuneOpen && (
+        <div className="rounded-lg bg-stone-50 border border-stone-200 p-3 space-y-2">
+          <textarea
+            rows={2}
+            value={fineTuneNotes}
+            onChange={(e) => setFineTuneNotes(e.target.value)}
+            placeholder="e.g. make the jacket leather, shorter hair, add a beard…"
+            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+            disabled={fineTuning}
+          />
+          {fineTuneError && (
+            <p className="text-xs text-red-600 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+              {fineTuneError}
+            </p>
+          )}
+          <button
+            onClick={() => void handleFineTune()}
+            disabled={fineTuning || !fineTuneNotes.trim()}
+            className="flex items-center gap-1.5 text-xs font-medium text-white bg-stone-800 rounded-md px-2.5 py-1.5 hover:bg-stone-900 transition-colors disabled:opacity-50"
+          >
+            {fineTuning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
+            {fineTuning ? 'Regenerating…' : 'Regenerate with notes'}
+          </button>
+        </div>
+      )}
+
+      {/* Fine-tune inline form */}
+      {fineTuneOpen && (
+        <div className="rounded-lg bg-stone-50 border border-stone-200 p-3 space-y-2">
+          <textarea
+            rows={2}
+            value={fineTuneNotes}
+            onChange={(e) => setFineTuneNotes(e.target.value)}
+            placeholder="e.g. make the jacket leather, shorter hair, add a beard…"
+            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+            disabled={fineTuning}
+          />
+          {fineTuneError && (
+            <p className="text-xs text-red-600 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+              {fineTuneError}
+            </p>
+          )}
+          <button
+            onClick={() => void handleFineTune()}
+            disabled={fineTuning || !fineTuneNotes.trim()}
+            className="flex items-center gap-1.5 text-xs font-medium text-white bg-stone-800 rounded-md px-2.5 py-1.5 hover:bg-stone-900 transition-colors disabled:opacity-50"
+          >
+            {fineTuning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
+            {fineTuning ? 'Regenerating…' : 'Regenerate with notes'}
+          </button>
+        </div>
+      )}
 
       {!still && (
         <p className="text-xs text-stone-400 flex items-center gap-2 py-1">
@@ -1321,9 +1642,10 @@ interface EntitySectionProps {
   refStills: ReferenceStills;
   onApprove: (entityId: string, url: string) => void;
   onUploaded: (entityId: string, url: string, candidates: string[]) => void;
+  onFineTuned: (entityId: string, candidates: string[]) => void;
 }
 
-function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded }: EntitySectionProps) {
+function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded, onFineTuned }: EntitySectionProps) {
   if (entities.length === 0) return null;
 
   return (
@@ -1338,6 +1660,7 @@ function EntitySection({ title, entities, storyboardId, refStills, onApprove, on
             storyboardId={storyboardId}
             onApprove={onApprove}
             onUploaded={onUploaded}
+            onFineTuned={onFineTuned}
           />
         ))}
       </div>

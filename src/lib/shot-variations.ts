@@ -18,6 +18,7 @@ export const SHOT_VARIATION_GROUPS: VariationGroup[] = [
       { id: 'tighter', label: 'Tighter', prompt: 'Push in — tighter framing on subject, more intimate and intense.' },
       { id: 'wider', label: 'Wider', prompt: 'Pull back — wider framing revealing more environment, subject smaller.' },
       { id: 'insert', label: 'Insert / CU', prompt: 'Extreme close-up insert — isolate a specific detail or object within the scene.' },
+      { id: 'xcu', label: 'Extreme Close Up', prompt: 'Extreme close-up on face — eyes, hands, or mouth filling the entire frame. Maximum intimacy and psychological intensity.' },
       { id: 'ots', label: 'Over-the-shoulder', prompt: 'Over-the-shoulder composition — figure in foreground partially occluding, subject beyond.' },
     ],
   },

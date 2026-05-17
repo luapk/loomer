@@ -3,31 +3,52 @@ import {
   PDFDocument,
   StandardFonts,
   rgb,
-  PDFPage,
   PDFFont,
+  PDFImage,
 } from 'pdf-lib';
 import { getDb } from '@/src/lib/db';
-import { ParsedStoryboardSchema } from '@/src/schema/storyboard';
+import type { ParsedStoryboard } from '@/src/schema/storyboard';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 // ============================================================================
-// Layout constants
+// Layout constants — Landscape A4
 // ============================================================================
 
-const PAGE_W = 595;
-const PAGE_H = 842;
-const MARGIN = 48;
-const CONTENT_W = PAGE_W - MARGIN * 2;
+const PAGE_W = 841.89;
+const PAGE_H = 595.28;
+const MARGIN_H = 48;
+const MARGIN_TOP = 36;
+const MARGIN_BOTTOM = 30;
 
-// Stone palette
-const TEXT = rgb(0.1, 0.1, 0.1);
-const GREY = rgb(0.4, 0.4, 0.4);
-const LIGHT = rgb(0.7, 0.7, 0.7);
+const HEADER_H = 20;
+const FOOTER_H = 16;
+const SCENE_GAP = 8;
+
+const COLS = 3;
+const ROWS = 2; // 3×2 = 6 shots per page — more vertical room per cell
+const COL_GAP = 10;
+const ROW_GAP = 16;
+
+const contentW = PAGE_W - 2 * MARGIN_H; // 745.89
+const cellW = (contentW - (COLS - 1) * COL_GAP) / COLS; // ≈241.96
+const imgH = cellW * 9 / 16; // ≈136.1 — 16:9 matches Gemini output
+
+const gridTopY =
+  PAGE_H - MARGIN_TOP - HEADER_H - SCENE_GAP - 18 - SCENE_GAP; // 505.28
+const gridBottomY = MARGIN_BOTTOM + FOOTER_H + SCENE_GAP; // 54
+const gridH = gridTopY - gridBottomY; // 451.28
+const cellH = (gridH - (ROWS - 1) * ROW_GAP) / ROWS; // ≈217.64 with 2 rows
+
+// Colors
+const INK = rgb(0.067, 0.067, 0.067);
+const MID = rgb(0.5, 0.5, 0.5);
+const DIM = rgb(0.7, 0.7, 0.7);
+const DARK_PLACEHOLDER = rgb(0.15, 0.15, 0.15);
 
 // ============================================================================
-// ShotKeyFrames type — keyed by shot_number string
+// Shot key frame types
 // ============================================================================
 
 type ShotKeyFrameEntry = {
@@ -36,7 +57,6 @@ type ShotKeyFrameEntry = {
   error?: string;
 };
 
-// The Prisma Json field deserialises to `unknown`; we cast after runtime check.
 type ShotKeyFrames = Record<string, ShotKeyFrameEntry>;
 
 // ============================================================================
@@ -50,23 +70,38 @@ function slugify(title: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Draw wrapped text, returning the y position after the last line. */
-function drawWrapped(
-  page: PDFPage,
-  text: string,
-  opts: {
-    x: number;
-    y: number;
-    maxWidth: number;
-    font: PDFFont;
-    size: number;
-    color: ReturnType<typeof rgb>;
-    lineHeight?: number;
-  },
-): number {
-  const { x, y, maxWidth, font, size, color } = opts;
-  const lineHeight = opts.lineHeight ?? size * 1.4;
+function toTitleCase(str: string): string {
+  const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
+  return str
+    .toLowerCase()
+    .replace(/[^\s-]+/g, (word: string, offset: number) =>
+      offset === 0 || !minors.has(word) ? word.charAt(0).toUpperCase() + word.slice(1) : word
+    );
+}
 
+/** Sanitize text for WinAnsi encoding — standard pdf-lib fonts only support Latin-1. */
+function safe(text: string | null | undefined): string {
+  if (!text) return "";
+  return text
+    .replace(/—/g, '--')   // em dash
+    .replace(/–/g, '-')    // en dash
+    .replace(/[“”]/g, '"')  // curly double quotes
+    .replace(/[‘’]/g, "'")  // curly single quotes
+    .replace(/…/g, '...')  // ellipsis
+    .replace(/•/g, '*')    // bullet
+    .replace(/●/g, '*')    // black circle bullet
+    .replace(/ /g, ' ')    // non-breaking space
+    .replace(/’/g, "'")    // right single quote
+    .replace(/[^\x00-\xFF]/g, ''); // strip anything else outside Latin-1
+}
+
+/** Split text into lines that fit within maxWidth using word-wrap. */
+function wrapText(
+  text: string,
+  maxWidth: number,
+  font: PDFFont,
+  size: number,
+): string[] {
   const words = text.split(/\s+/);
   const lines: string[] = [];
   let current = '';
@@ -82,13 +117,7 @@ function drawWrapped(
   }
   if (current) lines.push(current);
 
-  let curY = y;
-  for (const line of lines) {
-    page.drawText(line, { x, y: curY, size, font, color });
-    curY -= lineHeight;
-  }
-
-  return curY;
+  return lines;
 }
 
 /** Fetch a URL and return its bytes, or null on failure. */
@@ -103,201 +132,314 @@ async function fetchBytes(url: string): Promise<Uint8Array | null> {
   }
 }
 
-// ============================================================================
-// Page builders
-// ============================================================================
-
-function buildCoverPage(
+/** Try to embed an image from bytes — tries JPEG first, falls back to PNG. */
+async function embedImage(
   pdfDoc: PDFDocument,
-  fonts: { regular: PDFFont; bold: PDFFont },
-  parsed: ReturnType<typeof ParsedStoryboardSchema.parse>,
-): void {
-  const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
-
-  // Border rectangle
-  page.drawRectangle({
-    x: 40,
-    y: 40,
-    width: PAGE_W - 80,
-    height: PAGE_H - 80,
-    borderColor: LIGHT,
-    borderWidth: 0.5,
-  });
-
-  let y = PAGE_H - MARGIN - 60;
-
-  // Title
-  const titleSize = 36;
-  const titleWidth = fonts.bold.widthOfTextAtSize(parsed.title, titleSize);
-  const titleX = Math.max(MARGIN, (PAGE_W - titleWidth) / 2);
-  page.drawText(parsed.title, {
-    x: titleX,
-    y,
-    size: titleSize,
-    font: fonts.bold,
-    color: TEXT,
-  });
-
-  y -= 48;
-
-  // Subtitle
-  const subtitle = 'Illustrated Storyboard';
-  const subtitleSize = 18;
-  const subtitleWidth = fonts.regular.widthOfTextAtSize(subtitle, subtitleSize);
-  page.drawText(subtitle, {
-    x: (PAGE_W - subtitleWidth) / 2,
-    y,
-    size: subtitleSize,
-    font: fonts.regular,
-    color: GREY,
-  });
-
-  y -= 32;
-
-  // Shot count + format
-  const format = parsed.format.replace('_', ' ');
-  const meta = `${parsed.total_shots} shots · ${format} · ${parsed.duration_seconds}s`;
-  const metaSize = 12;
-  const metaWidth = fonts.regular.widthOfTextAtSize(meta, metaSize);
-  page.drawText(meta, {
-    x: (PAGE_W - metaWidth) / 2,
-    y,
-    size: metaSize,
-    font: fonts.regular,
-    color: GREY,
-  });
-
-  y -= 36;
-
-  // Narrative arc (max 400 chars with ellipsis)
-  const arc =
-    parsed.narrative_arc.length > 400
-      ? parsed.narrative_arc.slice(0, 397) + '…'
-      : parsed.narrative_arc;
-
-  drawWrapped(page, arc, {
-    x: MARGIN + 24,
-    y,
-    maxWidth: CONTENT_W - 48,
-    font: fonts.regular,
-    size: 10,
-    color: GREY,
-  });
+  bytes: Uint8Array,
+): Promise<PDFImage | null> {
+  try {
+    return await pdfDoc.embedJpg(bytes);
+  } catch {
+    try {
+      return await pdfDoc.embedPng(bytes);
+    } catch {
+      return null;
+    }
+  }
 }
 
-async function buildShotPage(
+// ============================================================================
+// Grid pages — 3×3, no cover, no detail pages
+// ============================================================================
+
+async function buildGridPages(
   pdfDoc: PDFDocument,
-  fonts: { regular: PDFFont; bold: PDFFont; oblique: PDFFont },
-  shot: ReturnType<typeof ParsedStoryboardSchema.parse>['shots'][number],
-  frameUrl: string,
+  fonts: {
+    regular: PDFFont;
+    bold: PDFFont;
+    italic: PDFFont;
+  },
+  parsed: ParsedStoryboard,
+  keyFrames: ShotKeyFrames,
 ): Promise<void> {
-  const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  const shots = parsed.shots;
+  const title = parsed.title;
+  const SHOTS_PER_PAGE = COLS * ROWS;
 
-  const shotLabel = `SHOT ${String(shot.shot_number).padStart(2, '0')}`;
-  let y = PAGE_H - MARGIN;
+  // Include ALL shots — show placeholder for non-done shots
+  const totalPages = Math.ceil(shots.length / SHOTS_PER_PAGE);
 
-  // Shot number — top-left, bold monospace grey
-  page.drawText(shotLabel, {
-    x: MARGIN,
-    y,
-    size: 10,
-    font: fonts.bold,
-    color: GREY,
+  // Fetch all images in parallel up front
+  const imageMap = new Map<number, PDFImage | null>();
+  const fetchTasks = shots.map(async (shot) => {
+    const key = String(shot.shot_number);
+    const frame = keyFrames[key];
+    if (frame && frame.status === 'done' && frame.url) {
+      const bytes = await fetchBytes(frame.url);
+      if (bytes) {
+        const img = await embedImage(pdfDoc, bytes);
+        imageMap.set(shot.shot_number, img);
+        return;
+      }
+    }
+    imageMap.set(shot.shot_number, null);
   });
+  await Promise.all(fetchTasks);
 
-  // Descriptor — top-centre
-  const descSize = 12;
-  const descWidth = fonts.regular.widthOfTextAtSize(shot.descriptor, descSize);
-  const descX = Math.max(MARGIN, (PAGE_W - descWidth) / 2);
-  page.drawText(shot.descriptor, {
-    x: descX,
-    y,
-    size: descSize,
-    font: fonts.regular,
-    color: TEXT,
-  });
+  for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
+    const pageNum = pageIdx + 1;
+    const pageShots = shots.slice(
+      pageIdx * SHOTS_PER_PAGE,
+      (pageIdx + 1) * SHOTS_PER_PAGE,
+    );
 
-  y -= 20;
+    const firstShot = pageShots[0]?.shot_number ?? pageIdx * SHOTS_PER_PAGE + 1;
+    const lastShot =
+      pageShots[pageShots.length - 1]?.shot_number ??
+      Math.min((pageIdx + 1) * SHOTS_PER_PAGE, shots.length);
 
-  // Thin rule
-  page.drawLine({
-    start: { x: MARGIN, y },
-    end: { x: PAGE_W - MARGIN, y },
-    thickness: 0.5,
-    color: LIGHT,
-  });
+    const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
 
-  y -= 16;
+    // ── Header ────────────────────────────────────────────────────────────────
+    const headerY = PAGE_H - MARGIN_TOP; // 559.28
 
-  // Key frame image
-  const imgBytes = await fetchBytes(frameUrl);
-  if (imgBytes) {
-    try {
-      const img = await pdfDoc.embedJpg(imgBytes);
-      const intrinsicW = img.width;
-      const intrinsicH = img.height;
-      const maxImgH = 360;
-      const availW = CONTENT_W;
-      const scale = Math.min(availW / intrinsicW, maxImgH / intrinsicH, 1);
-      const imgW = intrinsicW * scale;
-      const imgH = intrinsicH * scale;
-      const imgX = MARGIN + (availW - imgW) / 2;
+    // "LOOMER" — simulate letterspacing by drawing char-by-char
+    const loomerChars = 'LOOMER'.split('');
+    let loomerX = MARGIN_H;
+    const loomerSize = 7;
+    for (const ch of loomerChars) {
+      page.drawText(ch, {
+        x: loomerX,
+        y: headerY,
+        size: loomerSize,
+        font: fonts.bold,
+        color: INK,
+      });
+      loomerX += fonts.bold.widthOfTextAtSize(ch, loomerSize) + 1.2;
+    }
 
-      page.drawImage(img, {
-        x: imgX,
-        y: y - imgH,
-        width: imgW,
-        height: imgH,
+    // Mono info strip after LOOMER
+    const firstShotPad = String(firstShot).padStart(2, '0');
+    const lastShotPad = String(lastShot).padStart(2, '0');
+    const infoText = `SC.${firstShotPad}-${lastShotPad} · 2.39:1 · STORYBOARD`;
+    page.drawText(infoText, {
+      x: MARGIN_H + 50,
+      y: headerY,
+      size: 7,
+      font: fonts.regular,
+      color: MID,
+    });
+
+    // Title right-aligned
+    const titleSize = 14;
+    const safeTitle = safe(toTitleCase(title));
+    const titleW = fonts.italic.widthOfTextAtSize(safeTitle, titleSize);
+    page.drawText(safeTitle, {
+      x: PAGE_W - MARGIN_H - titleW,
+      y: headerY,
+      size: titleSize,
+      font: fonts.italic,
+      color: INK,
+    });
+
+    // Hairline under header
+    const hairlineY = headerY - 22;
+    page.drawLine({
+      start: { x: MARGIN_H, y: hairlineY },
+      end: { x: PAGE_W - MARGIN_H, y: hairlineY },
+      thickness: 0.5,
+      color: INK,
+    });
+
+    // ── Shot count row ────────────────────────────────────────────────────────
+    const shotRowY = hairlineY - SCENE_GAP - 14; // ≈ 505.28 - 8 - 14 = 483.28
+
+    const shotsLabel = `SHOTS ${firstShotPad}-${lastShotPad}`;
+    page.drawText(shotsLabel, {
+      x: MARGIN_H,
+      y: shotRowY,
+      size: 8,
+      font: fonts.bold,
+      color: INK,
+    });
+
+    const pageLabel = `PAGE ${pageNum} / ${totalPages}`;
+    const pageLabelW = fonts.regular.widthOfTextAtSize(pageLabel, 8);
+    page.drawText(pageLabel, {
+      x: PAGE_W - MARGIN_H - pageLabelW,
+      y: shotRowY,
+      size: 8,
+      font: fonts.regular,
+      color: INK,
+    });
+
+    // Hairline across the shot count row
+    const shotsLabelW = fonts.bold.widthOfTextAtSize(shotsLabel, 8);
+    page.drawLine({
+      start: { x: MARGIN_H + shotsLabelW + 8, y: shotRowY + 3 },
+      end: { x: PAGE_W - MARGIN_H - pageLabelW - 8, y: shotRowY + 3 },
+      thickness: 0.5,
+      color: DIM,
+    });
+
+    // ── 3×3 Grid ─────────────────────────────────────────────────────────────
+    for (let i = 0; i < pageShots.length; i++) {
+      const shot = pageShots[i]!;
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+
+      const cellX = MARGIN_H + col * (cellW + COL_GAP);
+      // cellY = top of cell in pdf-lib y coords (y=0 at bottom)
+      const cellTopY = gridTopY - row * (cellH + ROW_GAP);
+      const cellBottomY = cellTopY - cellH;
+
+      // 1. Meta row (height 10pt) at top of cell
+      const metaY = cellTopY - 8; // baseline of meta text
+
+      const shotNum = String(shot.shot_number).padStart(2, '0');
+      page.drawText(shotNum, {
+        x: cellX,
+        y: metaY,
+        size: 8,
+        font: fonts.bold,
+        color: INK,
       });
 
-      y -= imgH + 16;
-    } catch {
-      // If embedding fails (e.g. PNG returned instead of JPEG), skip image block
-      y -= 8;
+      // Descriptor truncated to 30 chars — centred
+      const descText = safe(
+        shot.descriptor.length > 30
+          ? shot.descriptor.slice(0, 30)
+          : shot.descriptor,
+      );
+      const descW = fonts.regular.widthOfTextAtSize(descText, 7);
+      page.drawText(descText, {
+        x: cellX + (cellW - descW) / 2,
+        y: metaY,
+        size: 7,
+        font: fonts.regular,
+        color: MID,
+      });
+
+      // Scale + lens — right-aligned
+      const scaleLens = safe(`${shot.grammar.scale} · ${shot.grammar.lens}`);
+      const scaleLensW = fonts.regular.widthOfTextAtSize(scaleLens, 7);
+      page.drawText(scaleLens, {
+        x: cellX + cellW - scaleLensW,
+        y: metaY,
+        size: 7,
+        font: fonts.regular,
+        color: MID,
+      });
+
+      // 2. Image area (imgH tall), below meta row with 3pt gap
+      const imageTopY = cellTopY - 10 - 3;
+      const imageBottomY = imageTopY - imgH;
+
+      // Dark grey placeholder
+      page.drawRectangle({
+        x: cellX,
+        y: imageBottomY,
+        width: cellW,
+        height: imgH,
+        color: DARK_PLACEHOLDER,
+      });
+
+      // Draw image over placeholder if available — preserve aspect ratio (contain)
+      const img = imageMap.get(shot.shot_number);
+      if (img) {
+        const { width: iw, height: ih } = img.size();
+        const scale = Math.min(cellW / iw, imgH / ih);
+        const drawW = iw * scale;
+        const drawH = ih * scale;
+        page.drawImage(img, {
+          x: cellX + (cellW - drawW) / 2,
+          y: imageBottomY + (imgH - drawH) / 2,
+          width: drawW,
+          height: drawH,
+        });
+      }
+
+      // 3. Action line below image — guard against overflow into next row
+      const TEXT_LINE_H = 11;
+      const DIALOGUE_LINE_H = 9.5;
+      const TEXT_MARGIN = 4; // minimum gap above cell bottom
+      let textCursorY = imageBottomY - 4;
+      const actionLines = wrapText(safe(shot.action_beat), cellW, fonts.regular, 7.5);
+      for (const line of actionLines) {
+        if (textCursorY - TEXT_LINE_H < cellBottomY + TEXT_MARGIN) break;
+        page.drawText(line, {
+          x: cellX,
+          y: textCursorY,
+          size: 7.5,
+          font: fonts.regular,
+          color: rgb(0.2, 0.2, 0.2),
+        });
+        textCursorY -= TEXT_LINE_H;
+      }
+
+      // 4. Dialogue if present — only if space remains
+      if (shot.dialogue_vo && textCursorY - DIALOGUE_LINE_H >= cellBottomY + TEXT_MARGIN) {
+        textCursorY -= 2;
+        const dialogueText = safe(`"${shot.dialogue_vo}"`);
+        const dialogueLines = wrapText(dialogueText, cellW, fonts.bold, 6.5);
+        for (const line of dialogueLines) {
+          if (textCursorY - DIALOGUE_LINE_H < cellBottomY + TEXT_MARGIN) break;
+          page.drawText(line, {
+            x: cellX,
+            y: textCursorY,
+            size: 6.5,
+            font: fonts.italic,
+            color: rgb(0.4, 0.4, 0.4),
+          });
+          textCursorY -= DIALOGUE_LINE_H;
+        }
+      }
     }
-  } else {
-    y -= 8;
-  }
 
-  // Function line — italics
-  y = drawWrapped(page, shot.function, {
-    x: MARGIN,
-    y,
-    maxWidth: CONTENT_W,
-    font: fonts.oblique,
-    size: 9,
-    color: GREY,
-  });
+    // ── Footer ────────────────────────────────────────────────────────────────
+    const footerHairlineY = MARGIN_BOTTOM + FOOTER_H; // 46
+    page.drawLine({
+      start: { x: MARGIN_H, y: footerHairlineY },
+      end: { x: PAGE_W - MARGIN_H, y: footerHairlineY },
+      thickness: 0.5,
+      color: INK,
+    });
 
-  y -= 4;
+    const footerTextY = MARGIN_BOTTOM + 4; // baseline below hairline
 
-  // Metadata line: scale | lens | duration
-  const metaLine = [
-    shot.grammar.scale,
-    shot.grammar.lens,
-    shot.duration?.veo != null ? `Veo ${shot.duration.veo}s` : null,
-  ].filter(Boolean).join('  ·  ');
-
-  page.drawText(metaLine, {
-    x: MARGIN,
-    y,
-    size: 9,
-    font: fonts.regular,
-    color: GREY,
-  });
-
-  y -= 16;
-
-  // Dialogue / VO
-  if (shot.dialogue_vo) {
-    const quote = `"${shot.dialogue_vo}"`;
-    drawWrapped(page, quote, {
-      x: MARGIN,
-      y,
-      maxWidth: CONTENT_W,
+    // Left: storyboard title in grey
+    page.drawText(safe(toTitleCase(title)), {
+      x: MARGIN_H,
+      y: footerTextY,
+      size: 7,
       font: fonts.regular,
-      size: 9,
-      color: rgb(0.45, 0.42, 0.38), // warm stone
+      color: MID,
+    });
+
+    // Center: today's date
+    const dateStr = new Date().toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    const dateW = fonts.regular.widthOfTextAtSize(dateStr, 7);
+    page.drawText(dateStr, {
+      x: (PAGE_W - dateW) / 2,
+      y: footerTextY,
+      size: 7,
+      font: fonts.regular,
+      color: MID,
+    });
+
+    // Right: "● PAGE X / Y"
+    const footerRight = `* PAGE ${pageNum} / ${totalPages}`;
+    const footerRightW = fonts.bold.widthOfTextAtSize(footerRight, 7);
+    page.drawText(footerRight, {
+      x: PAGE_W - MARGIN_H - footerRightW,
+      y: footerTextY,
+      size: 7,
+      font: fonts.bold,
+      color: INK,
     });
   }
 }
@@ -319,67 +461,46 @@ export async function GET(
     return Response.json({ error: 'Storyboard not found' }, { status: 404 });
   }
 
-  if (!row.shot_key_frames) {
+  // Use type assertion — the stored JSON may not pass Zod due to schema evolution
+  const parsed = row.parsed_json as unknown as ParsedStoryboard;
+
+  if (!parsed?.shots?.length) {
     return Response.json(
-      { error: 'No shots generated yet', code: 'NO_SHOTS' },
+      { error: 'Storyboard has no shots', code: 'NO_SHOTS' },
       { status: 422 },
     );
   }
 
-  // Parse shot_key_frames — Prisma returns Json as `unknown`
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const keyFrames = row.shot_key_frames as any as ShotKeyFrames;
-
-  const doneCount = Object.values(keyFrames).filter(
-    (f) => f.status === 'done' && f.url,
-  ).length;
-
-  if (doneCount === 0) {
-    return Response.json(
-      { error: 'No shots generated yet', code: 'NO_SHOTS' },
-      { status: 422 },
-    );
-  }
-
-  // Parse parsed_json
-  const parseResult = ParsedStoryboardSchema.safeParse(row.parsed_json);
-  if (!parseResult.success) {
-    return Response.json(
-      { error: 'Storyboard parse data is invalid', details: parseResult.error.flatten() },
-      { status: 500 },
-    );
-  }
-  const parsed = parseResult.data;
+  // key frames may be null if generation hasn't started — use empty record
+  const keyFrames: ShotKeyFrames = row.shot_key_frames
+    ? (row.shot_key_frames as unknown as ShotKeyFrames)
+    : {};
 
   // ── Build PDF ──────────────────────────────────────────────────────────────
 
-  const pdfDoc = await PDFDocument.create();
+  try {
+    const pdfDoc = await PDFDocument.create();
 
-  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const oblique = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+    const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const italic = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
 
-  // Cover page
-  buildCoverPage(pdfDoc, { regular, bold }, parsed);
+    await buildGridPages(pdfDoc, { regular, bold, italic }, parsed, keyFrames);
 
-  // Shot pages — one per shot with a done URL
-  for (const shot of parsed.shots) {
-    const key = String(shot.shot_number);
-    const frame = keyFrames[key];
-    if (!frame || frame.status !== 'done' || !frame.url) continue;
+    const pdfBytes = await pdfDoc.save();
 
-    await buildShotPage(pdfDoc, { regular, bold, oblique }, shot, frame.url);
+    const filename = `${slugify(parsed.title || row.title)}.pdf`;
+
+    return new Response(new Uint8Array(pdfBytes), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('PDF generation failed:', message);
+    return Response.json({ error: 'PDF generation failed', details: message }, { status: 500 });
   }
-
-  const pdfBytes = await pdfDoc.save();
-
-  const filename = `${slugify(parsed.title || row.title)}.pdf`;
-
-  return new Response(Buffer.from(pdfBytes), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-    },
-  });
 }
