@@ -62,10 +62,14 @@ async function generateOneImage(
       throw new Error(`No image in response (model: ${model}). ${detail}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const isRetryable = msg.includes('"code":429') || msg.includes('"code":400');
-      if (isRetryable && attempt < delays.length) {
+      const isQuotaExceeded = msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('billing');
+      const isRateLimit = (msg.includes('"code":429') || msg.includes('"code":400')) && !isQuotaExceeded;
+      if (isRateLimit && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
+      }
+      if (isQuotaExceeded) {
+        throw new Error('Google AI quota exceeded — upgrade your plan at ai.google.dev or try again tomorrow.');
       }
       throw err;
     }

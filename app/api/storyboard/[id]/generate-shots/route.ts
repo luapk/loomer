@@ -111,12 +111,15 @@ async function generateOneShot(
       }
       return null;
     } catch (err) {
-      const is429or400 =
-        err instanceof Error &&
-        (err.message.includes('"code":429') || err.message.includes('"code":400'));
-      if (is429or400 && attempt < delays.length) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isQuotaExceeded = msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('billing');
+      const isRateLimit = (msg.includes('"code":429') || msg.includes('"code":400')) && !isQuotaExceeded;
+      if (isRateLimit && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
+      }
+      if (isQuotaExceeded) {
+        throw new Error('Google AI quota exceeded — upgrade your plan at ai.google.dev or try again tomorrow.');
       }
       throw err;
     }
