@@ -8,7 +8,7 @@ import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, Check, ImageIcon,
-  Film, Download, ScanEye, Pencil, Bell, BellOff, Plus,
+  Film, Download, ScanEye, Pencil, Bell, BellOff, X,
 } from 'lucide-react';
 
 function toTitleCase(str: string): string {
@@ -1248,22 +1248,18 @@ function HomePageInner() {
                       />
                     </div>
                   )}
-                  {/* Continuity issue badge */}
+                  {/* Continuity issue panel */}
                   {continuityIssues.filter((i) => i.shot_number === (shot.shot_number as number)).map((issue, idx) => (
                     <div
                       key={idx}
-                      className={`absolute bottom-2 left-2 right-12 rounded-lg px-2 py-1 text-xs flex items-center gap-1.5 ${
-                        issue.severity === 'error'
-                          ? 'bg-red-900/80 text-red-100'
-                          : 'bg-amber-800/80 text-amber-100'
-                      }`}
+                      className="absolute bottom-2 left-2 right-12 rounded-lg bg-white px-2.5 py-1.5 text-xs flex items-center gap-2 shadow-md"
                     >
-                      <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-                      <span className="flex-1 leading-tight truncate">{issue.description}</span>
+                      <AlertTriangle className="h-3 w-3 flex-shrink-0 text-amber-500" />
+                      <span className="flex-1 leading-tight text-stone-800">{issue.description}</span>
                       {'id' in state && (
                         <button
                           type="button"
-                          title="Fix: regenerate using this note"
+                          title="Regenerate using this fix"
                           disabled={continuityFixing.has(shot.shot_number as number)}
                           onClick={async () => {
                             const sn = shot.shot_number as number;
@@ -1282,13 +1278,31 @@ function HomePageInner() {
                             } catch { /* ignore */ }
                             setContinuityFixing((prev) => { const s = new Set(prev); s.delete(sn); return s; });
                           }}
-                          className="flex-shrink-0 h-5 w-5 flex items-center justify-center rounded bg-white/20 hover:bg-white/40 transition-colors disabled:opacity-50"
+                          className="flex-shrink-0 h-5 w-5 flex items-center justify-center rounded hover:bg-stone-100 transition-colors disabled:opacity-40"
                         >
                           {continuityFixing.has(shot.shot_number as number)
-                            ? <Loader2 className="h-3 w-3 animate-spin" />
-                            : <Plus className="h-3 w-3" />}
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-500" />
+                            : <Check className="h-3.5 w-3.5 text-green-600" />}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        title="Dismiss"
+                        onClick={() => {
+                          const sn = shot.shot_number as number;
+                          let removed = false;
+                          setContinuityIssues((prev) => prev.filter((item) => {
+                            if (!removed && item.shot_number === sn && item.description === issue.description) {
+                              removed = true;
+                              return false;
+                            }
+                            return true;
+                          }));
+                        }}
+                        className="flex-shrink-0 h-5 w-5 flex items-center justify-center rounded hover:bg-stone-100 transition-colors"
+                      >
+                        <X className="h-3.5 w-3.5 text-stone-400" />
+                      </button>
                     </div>
                   ))}
                 </div>
