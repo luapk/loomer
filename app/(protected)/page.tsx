@@ -675,18 +675,18 @@ function HomePageInner() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">
+          <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
             {isLoaded && 'title' in state ? state.title
               : (isGenerating || isParsing) && 'title' in state && state.title ? state.title
-              : 'New storyboard'}
+              : <span>New <em>storyboard</em></span>}
           </h1>
           {state.phase === 'empty' && (
-            <p className="mt-1 text-stone-500 text-sm">
+            <p className="mt-2" style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 15, lineHeight: 1.5, color: 'var(--ink-mid)', maxWidth: 480 }}>
               Paste a script, premise, or beat list. The storyboard skill handles the rest.
             </p>
           )}
           {'id' in state && (
-            <p className="text-xs text-stone-400 font-mono mt-1">ID: {state.id}</p>
+            <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--ink-dim)', marginTop: 6 }}>ID: {state.id}</p>
           )}
         </div>
         {isLoaded && 'warnings' in state && (
@@ -700,24 +700,40 @@ function HomePageInner() {
       </div>
 
       {/* ── Tab bar — always visible ── */}
-      <div className="flex gap-1 border-b border-stone-200">
+      <div className="flex" style={{ borderBottom: '1px solid var(--ink)' }}>
         {tabDefs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => tab.enabled && setActiveTab(tab.id)}
             aria-disabled={!tab.enabled}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-colors relative select-none ${
-              !tab.enabled
-                ? 'text-stone-300 cursor-not-allowed'
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 10,
+              letterSpacing: '0.16em',
+              textTransform: 'uppercase',
+              padding: '10px 16px',
+              position: 'relative',
+              userSelect: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'color 0.15s',
+              color: !tab.enabled
+                ? 'var(--ink-ghost)'
                 : activeTab === tab.id
-                  ? 'text-stone-900 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-stone-900'
-                  : 'text-stone-500 hover:text-stone-700 cursor-pointer'
-            }`}
+                  ? 'var(--ink)'
+                  : 'var(--ink-low)',
+              cursor: !tab.enabled ? 'not-allowed' : 'pointer',
+              marginBottom: -1,
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === tab.id ? '2px solid var(--ink)' : '2px solid transparent',
+            }}
           >
             {'spinner' in tab && tab.spinner ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : ('done' in tab && tab.done && activeTab !== tab.id) ? (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
+              <CheckCircle2 style={{ width: 11, height: 11, color: '#3a9a5c', flexShrink: 0 }} />
             ) : null}
             {tab.label}
           </button>
