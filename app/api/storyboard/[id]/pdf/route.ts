@@ -70,6 +70,20 @@ function slugify(title: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+/** Sanitize text for WinAnsi encoding — standard pdf-lib fonts only support Latin-1. */
+function safe(text: string): string {
+  return text
+    .replace(/—/g, '--')   // em dash
+    .replace(/–/g, '-')    // en dash
+    .replace(/[“”]/g, '"')  // curly double quotes
+    .replace(/[‘’]/g, "'")  // curly single quotes
+    .replace(/…/g, '...')  // ellipsis
+    .replace(/•/g, '*')    // bullet
+    .replace(/ /g, ' ')    // non-breaking space
+    .replace(/’/g, "'")    // right single quote
+    .replace(/[^\x00-\xFF]/g, ''); // strip anything else outside Latin-1
+}
+
 /** Split text into lines that fit within maxWidth using word-wrap. */
 function wrapText(
   text: string,
@@ -207,8 +221,9 @@ async function buildGridPages(
 
     // Title right-aligned
     const titleSize = 14;
-    const titleW = fonts.italic.widthOfTextAtSize(title, titleSize);
-    page.drawText(title, {
+    const safeTitle = safe(title);
+    const titleW = fonts.italic.widthOfTextAtSize(safeTitle, titleSize);
+    page.drawText(safeTitle, {
       x: PAGE_W - MARGIN_H - titleW,
       y: headerY,
       size: titleSize,
@@ -228,7 +243,7 @@ async function buildGridPages(
     // ── Shot count row ────────────────────────────────────────────────────────
     const shotRowY = hairlineY - SCENE_GAP - 14; // ≈ 505.28 - 8 - 14 = 483.28
 
-    const shotsLabel = `SHOTS ${firstShotPad}–${lastShotPad}`;
+    const shotsLabel = `SHOTS ${firstShotPad}-${lastShotPad}`;
     page.drawText(shotsLabel, {
       x: MARGIN_H,
       y: shotRowY,
@@ -280,10 +295,11 @@ async function buildGridPages(
       });
 
       // Descriptor truncated to 30 chars — centred
-      const descText =
+      const descText = safe(
         shot.descriptor.length > 30
           ? shot.descriptor.slice(0, 30)
-          : shot.descriptor;
+          : shot.descriptor,
+      );
       const descW = fonts.regular.widthOfTextAtSize(descText, 7);
       page.drawText(descText, {
         x: cellX + (cellW - descW) / 2,
@@ -294,7 +310,7 @@ async function buildGridPages(
       });
 
       // Scale + lens — right-aligned
-      const scaleLens = `${shot.grammar.scale} · ${shot.grammar.lens}`;
+      const scaleLens = safe(`${shot.grammar.scale} · ${shot.grammar.lens}`);
       const scaleLensW = fonts.regular.widthOfTextAtSize(scaleLens, 7);
       page.drawText(scaleLens, {
         x: cellX + cellW - scaleLensW,
@@ -330,7 +346,7 @@ async function buildGridPages(
 
       // 3. Action line below image
       let textCursorY = imageBottomY - 3;
-      const actionLines = wrapText(shot.action_beat, cellW, fonts.regular, 7.5);
+      const actionLines = wrapText(safe(shot.action_beat), cellW, fonts.regular, 7.5);
       const actionRender = actionLines.slice(0, 2);
       for (const line of actionRender) {
         page.drawText(line, {
@@ -346,7 +362,7 @@ async function buildGridPages(
       // 4. Dialogue if present
       if (shot.dialogue_vo) {
         textCursorY -= 2;
-        const dialogueText = `"${shot.dialogue_vo.toUpperCase()}"`;
+        const dialogueText = safe(`"${shot.dialogue_vo.toUpperCase()}"`);
         const dialogueLines = wrapText(dialogueText, cellW, fonts.bold, 6.5);
         const dialogueRender = dialogueLines.slice(0, 2);
         for (const line of dialogueRender) {
@@ -376,7 +392,7 @@ async function buildGridPages(
     const footerTextY = MARGIN_BOTTOM + 4; // baseline below hairline
 
     // Left: storyboard title in grey
-    page.drawText(title, {
+    page.drawText(safe(title), {
       x: MARGIN_H,
       y: footerTextY,
       size: 7,
