@@ -80,6 +80,7 @@ function safe(text: string | null | undefined): string {
     .replace(/[‘’]/g, "'")  // curly single quotes
     .replace(/…/g, '...')  // ellipsis
     .replace(/•/g, '*')    // bullet
+    .replace(/●/g, '*')    // black circle bullet
     .replace(/ /g, ' ')    // non-breaking space
     .replace(/’/g, "'")    // right single quote
     .replace(/[^\x00-\xFF]/g, ''); // strip anything else outside Latin-1
@@ -417,7 +418,7 @@ async function buildGridPages(
     });
 
     // Right: "● PAGE X / Y"
-    const footerRight = `● PAGE ${pageNum} / ${totalPages}`;
+    const footerRight = `* PAGE ${pageNum} / ${totalPages}`;
     const footerRightW = fonts.bold.widthOfTextAtSize(footerRight, 7);
     page.drawText(footerRight, {
       x: PAGE_W - MARGIN_H - footerRightW,
