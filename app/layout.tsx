@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Image from 'next/image';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -6,49 +7,26 @@ export const metadata: Metadata = {
   description: 'Storyboard-to-stills pipeline',
 };
 
-function LoomerMark() {
-  return (
-    <span
-      style={{
-        fontFamily: "'Great Vibes', cursive",
-        fontSize: 22,
-        fontWeight: 400,
-        letterSpacing: '0.01em',
-        lineHeight: 1,
-      }}
-    >
-      Loomer
-    </span>
-  );
-}
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen">
         <div className="min-h-screen flex flex-col">
-          <header
-            className="sticky top-0 z-10 bg-[var(--paper)] px-14 py-4"
-            style={{ borderBottom: '1px solid var(--ink)' }}
-          >
+          <header className="sticky top-0 z-10 glass border-b border-stone-200/60 px-6 py-4">
             <div className="max-w-5xl mx-auto flex items-center justify-between">
-              <a href="/" className="text-[var(--ink)] hover:opacity-70 transition-opacity">
-                <LoomerMark />
+              <a href="/" className="hover:opacity-70 transition-opacity flex items-center">
+                <Image
+                  src="/loomer-logo.png"
+                  alt="Loomer"
+                  width={911}
+                  height={443}
+                  style={{ height: 32, width: 'auto' }}
+                  priority
+                />
               </a>
-              <nav
-                className="flex items-center gap-9"
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 10,
-                  letterSpacing: '0.18em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                <a href="/list" className="text-[var(--ink-low)] hover:text-[var(--ink)] transition-colors">
-                  Archive
-                </a>
-                <a href="/?how=1" className="text-[var(--ink-low)] hover:text-[var(--ink)] transition-colors">
-                  How it works
+              <nav className="flex items-center gap-6 text-sm text-stone-500">
+                <a href="/list" className="hover:text-stone-900 transition-colors">
+                  Projects
                 </a>
               </nav>
             </div>

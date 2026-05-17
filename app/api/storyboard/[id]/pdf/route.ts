@@ -27,19 +27,19 @@ const FOOTER_H = 16;
 const SCENE_GAP = 8;
 
 const COLS = 3;
-const ROWS = 3;
+const ROWS = 2; // 3×2 = 6 shots per page — more vertical room per cell
 const COL_GAP = 10;
-const ROW_GAP = 10;
+const ROW_GAP = 16;
 
 const contentW = PAGE_W - 2 * MARGIN_H; // 745.89
 const cellW = (contentW - (COLS - 1) * COL_GAP) / COLS; // ≈241.96
-const imgH = cellW / 2.39; // ≈101.24 — cinematic 2.39:1
+const imgH = cellW * 9 / 16; // ≈136.1 — 16:9 matches Gemini output
 
 const gridTopY =
   PAGE_H - MARGIN_TOP - HEADER_H - SCENE_GAP - 18 - SCENE_GAP; // 505.28
 const gridBottomY = MARGIN_BOTTOM + FOOTER_H + SCENE_GAP; // 54
 const gridH = gridTopY - gridBottomY; // 451.28
-const cellH = (gridH - (ROWS - 1) * ROW_GAP) / ROWS; // ≈143.76
+const cellH = (gridH - (ROWS - 1) * ROW_GAP) / ROWS; // ≈217.64 with 2 rows
 
 // Colors
 const INK = rgb(0.067, 0.067, 0.067);
@@ -68,6 +68,15 @@ function slugify(title: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+function toTitleCase(str: string): string {
+  const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
+  return str
+    .toLowerCase()
+    .replace(/[^\s-]+/g, (word: string, offset: number) =>
+      offset === 0 || !minors.has(word) ? word.charAt(0).toUpperCase() + word.slice(1) : word
+    );
 }
 
 /** Sanitize text for WinAnsi encoding — standard pdf-lib fonts only support Latin-1. */
@@ -223,7 +232,7 @@ async function buildGridPages(
 
     // Title right-aligned
     const titleSize = 14;
-    const safeTitle = safe(title);
+    const safeTitle = safe(toTitleCase(title));
     const titleW = fonts.italic.widthOfTextAtSize(safeTitle, titleSize);
     page.drawText(safeTitle, {
       x: PAGE_W - MARGIN_H - titleW,
@@ -335,22 +344,29 @@ async function buildGridPages(
         color: DARK_PLACEHOLDER,
       });
 
-      // Draw image over placeholder if available
+      // Draw image over placeholder if available — preserve aspect ratio (contain)
       const img = imageMap.get(shot.shot_number);
       if (img) {
+        const { width: iw, height: ih } = img.size();
+        const scale = Math.min(cellW / iw, imgH / ih);
+        const drawW = iw * scale;
+        const drawH = ih * scale;
         page.drawImage(img, {
-          x: cellX,
-          y: imageBottomY,
-          width: cellW,
-          height: imgH,
+          x: cellX + (cellW - drawW) / 2,
+          y: imageBottomY + (imgH - drawH) / 2,
+          width: drawW,
+          height: drawH,
         });
       }
 
-      // 3. Action line below image
-      let textCursorY = imageBottomY - 3;
+      // 3. Action line below image — guard against overflow into next row
+      const TEXT_LINE_H = 11;
+      const DIALOGUE_LINE_H = 9.5;
+      const TEXT_MARGIN = 4; // minimum gap above cell bottom
+      let textCursorY = imageBottomY - 4;
       const actionLines = wrapText(safe(shot.action_beat), cellW, fonts.regular, 7.5);
-      const actionRender = actionLines.slice(0, 2);
-      for (const line of actionRender) {
+      for (const line of actionLines) {
+        if (textCursorY - TEXT_LINE_H < cellBottomY + TEXT_MARGIN) break;
         page.drawText(line, {
           x: cellX,
           y: textCursorY,
@@ -358,26 +374,24 @@ async function buildGridPages(
           font: fonts.regular,
           color: rgb(0.2, 0.2, 0.2),
         });
-        textCursorY -= 10;
+        textCursorY -= TEXT_LINE_H;
       }
 
-      // 4. Dialogue if present
-      if (shot.dialogue_vo) {
+      // 4. Dialogue if present — only if space remains
+      if (shot.dialogue_vo && textCursorY - DIALOGUE_LINE_H >= cellBottomY + TEXT_MARGIN) {
         textCursorY -= 2;
-        const dialogueText = safe(`"${shot.dialogue_vo.toUpperCase()}"`);
+        const dialogueText = safe(`"${shot.dialogue_vo}"`);
         const dialogueLines = wrapText(dialogueText, cellW, fonts.bold, 6.5);
-        const dialogueRender = dialogueLines.slice(0, 2);
-        for (const line of dialogueRender) {
-          // Guard: don't draw below cell bottom
-          if (textCursorY < cellBottomY) break;
+        for (const line of dialogueLines) {
+          if (textCursorY - DIALOGUE_LINE_H < cellBottomY + TEXT_MARGIN) break;
           page.drawText(line, {
             x: cellX,
             y: textCursorY,
             size: 6.5,
-            font: fonts.bold,
-            color: rgb(0.5, 0.5, 0.5),
+            font: fonts.italic,
+            color: rgb(0.4, 0.4, 0.4),
           });
-          textCursorY -= 9;
+          textCursorY -= DIALOGUE_LINE_H;
         }
       }
     }
@@ -394,7 +408,7 @@ async function buildGridPages(
     const footerTextY = MARGIN_BOTTOM + 4; // baseline below hairline
 
     // Left: storyboard title in grey
-    page.drawText(safe(title), {
+    page.drawText(safe(toTitleCase(title)), {
       x: MARGIN_H,
       y: footerTextY,
       size: 7,

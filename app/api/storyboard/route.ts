@@ -109,7 +109,10 @@ export async function POST(request: NextRequest) {
         const markdown = fullText;
 
         const titleMatch = /^#\s+(.+)$/m.exec(markdown);
-        const title = titleMatch?.[1]?.trim() ?? 'Untitled';
+        const rawTitle = titleMatch?.[1]?.trim() ?? 'Untitled';
+        const title = rawTitle
+          .toLowerCase()
+          .replace(/\b\w/g, (c) => c.toUpperCase());
         const skillTriggered =
           markdown.includes('## Continuity Bible') || markdown.includes('### Shot 01');
 

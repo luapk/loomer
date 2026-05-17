@@ -8,8 +8,17 @@ import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, Check, ImageIcon,
-  Film, Download, ScanEye, Pencil,
+  Film, Download, ScanEye, Pencil, Bell, BellOff,
 } from 'lucide-react';
+
+function toTitleCase(str: string): string {
+  const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
+  return str
+    .toLowerCase()
+    .replace(/[^\s-]+/g, (word, offset) =>
+      offset === 0 || !minors.has(word) ? word.charAt(0).toUpperCase() + word.slice(1) : word
+    );
+}
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
@@ -105,6 +114,7 @@ function HomePageInner() {
   const [continuityRectifying, setContinuityRectifying] = useState<Set<number>>(new Set());
   const continuityAutoFixDone = useRef(false);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [notifyWhenDone, setNotifyWhenDone] = useState(false);
 
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
@@ -353,6 +363,7 @@ function HomePageInner() {
             setState((prev) =>
               prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
             );
+            if (notifyWhenDone) playChime();
           }
         }
       }
@@ -436,6 +447,7 @@ function HomePageInner() {
           } else if (payload['type'] === 'done') {
             setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'shots_done' } : prev));
             setShotsGenerating(false);
+            if (notifyWhenDone) playChime();
           }
         }
       }
@@ -492,6 +504,26 @@ function HomePageInner() {
     } finally {
       setContinuityChecking(false);
     }
+  }
+
+  function playChime() {
+    try {
+      const ctx = new AudioContext();
+      const times = [0, 0.18, 0.36];
+      const freqs = [880, 1108, 1320];
+      times.forEach((t, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.value = freqs[i]!;
+        gain.gain.setValueAtTime(0, ctx.currentTime + t);
+        gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + t + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.9);
+        osc.start(ctx.currentTime + t);
+        osc.stop(ctx.currentTime + t + 0.9);
+      });
+    } catch { /* AudioContext may be blocked */ }
   }
 
   async function doParse(id: string, title: string, markdown: string) {
@@ -751,14 +783,14 @@ function HomePageInner() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
-            {isLoaded && 'title' in state ? state.title
-              : (isGenerating || isParsing) && 'title' in state && state.title ? state.title
-              : <span>New <em>storyboard</em></span>}
+            {isLoaded && 'title' in state ? toTitleCase(state.title)
+              : (isGenerating || isParsing) && 'title' in state && state.title ? toTitleCase(state.title)
+              : <em>Storyboards that feel like film.</em>}
           </h1>
           {state.phase === 'empty' && (
             <div className="mt-3 space-y-3" style={{ maxWidth: 480 }}>
               <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 16, lineHeight: 1.55, color: 'var(--ink-mid)', fontStyle: 'italic' }}>
-                Storyboards that finally feel like film.
+                Paste a script, premise, or beat list — Loomer handles the rest.
               </p>
               <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, lineHeight: 1.5, color: 'var(--ink-dim)' }}>
                 Paste a script, premise, or beat list — Loomer breaks it into shots, sources reference stills, and renders cinematic key frames ready for client delivery.
@@ -874,45 +906,47 @@ function HomePageInner() {
                 Checking available models…
               </div>
             ) : (
-              <div className="space-y-1.5">
-                {availableModels.map((m) => {
-                  const active = imageModel === m.id;
-                  const unavailable = !m.available;
-                  return (
-                    <button
-                      key={m.id}
-                      onClick={() => !unavailable && setImageModel(m.id)}
-                      disabled={state.phase === 'generating_refs' || unavailable}
-                      className={`w-full text-left rounded-lg border px-3 py-2 text-xs transition-all ${
-                        unavailable
-                          ? 'border-stone-100 bg-stone-50 cursor-not-allowed'
-                          : active
-                            ? 'border-stone-900 bg-stone-900 text-white'
-                            : 'border-stone-200 bg-white hover:border-stone-300'
-                      }`}
-                    >
-                      <span className={`font-medium ${unavailable ? 'text-stone-300' : active ? 'text-white' : 'text-stone-900'}`}>
-                        {m.label}
-                      </span>
-                      <span className={`ml-2 ${unavailable ? 'text-stone-300' : active ? 'text-stone-300' : 'text-stone-400'}`}>
-                        {unavailable ? 'Quota exceeded' : m.description}
-                      </span>
-                    </button>
-                  );
-                })}
+              <div className="relative">
+                <select
+                  value={imageModel}
+                  onChange={(e) => setImageModel(e.target.value)}
+                  disabled={state.phase === 'generating_refs'}
+                  className="w-full appearance-none rounded-lg border border-stone-200 bg-white px-3 py-2 pr-8 text-xs text-stone-900 focus:outline-none focus:ring-2 focus:ring-stone-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {availableModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label} — {m.description}
+                    </option>
+                  ))}
+                </select>
+                <svg className="pointer-events-none absolute right-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-stone-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
               </div>
             )}
           </div>
 
           {/* Action row */}
           <div className="flex items-center justify-between pt-1 flex-wrap gap-3">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
-            >
-              New storyboard
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
+              >
+                New storyboard
+              </Button>
+              <button
+                type="button"
+                onClick={() => setNotifyWhenDone((v) => !v)}
+                title={notifyWhenDone ? 'Notifications on — click to disable' : 'Notify me when done'}
+                className={`h-8 w-8 flex items-center justify-center rounded-lg border transition-colors ${
+                  notifyWhenDone
+                    ? 'border-stone-900 bg-stone-900 text-white'
+                    : 'border-stone-200 bg-white text-stone-400 hover:border-stone-400 hover:text-stone-700'
+                }`}
+              >
+                {notifyWhenDone ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
+              </button>
+            </div>
             <div className="flex items-center gap-2 flex-wrap">
               {/* Ref generation */}
               {state.phase === 'generating_refs' ? (
