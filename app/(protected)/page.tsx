@@ -94,6 +94,7 @@ function HomePageInner() {
   // Shot key frames
   const [shotKeyFrames, setShotKeyFrames] = useState<ShotKeyFrames>({});
   const [shotsGenerating, setShotsGenerating] = useState(false);
+  const refsInFlight = useRef(false);
 
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
@@ -197,6 +198,8 @@ function HomePageInner() {
   }
 
   async function startGeneration(id: string) {
+    if (refsInFlight.current) return;
+    refsInFlight.current = true;
     // Save settings, then start the SSE generation stream
     await fetch(`/api/storyboard/${id}/settings`, {
       method: 'POST',
@@ -316,8 +319,20 @@ function HomePageInner() {
         }
       }
     } catch {
-      // stream closed — leave state as-is
+      // stream dropped — fall through to finally to reload from DB
     } finally {
+      refsInFlight.current = false;
+      // Reload reference_stills from DB — entity cards may still show "generating"
+      // if the SSE stream closed before all entity_done events arrived (e.g. timeout).
+      try {
+        const check = await fetch(`/api/storyboard/${id}`);
+        if (check.ok) {
+          const data = await check.json() as { reference_stills?: ReferenceStills };
+          if (data.reference_stills) {
+            setRefStills(data.reference_stills);
+          }
+        }
+      } catch { /* ignore */ }
       setState((prev) =>
         prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
       );
