@@ -153,7 +153,21 @@ function HomePageInner() {
         if (data.image_model) setImageModel(data.image_model);
 
         const refStillsData = data.reference_stills as ReferenceStills | null;
-        if (refStillsData) setRefStills(refStillsData);
+        if (refStillsData) {
+          // Normalize any entity left in 'generating' state (the previous session died).
+          // Entities with candidates → done; entities with none → error.
+          const normalized: ReferenceStills = {};
+          for (const [eid, s] of Object.entries(refStillsData)) {
+            if (s.status === 'generating') {
+              normalized[eid] = s.candidates.length > 0
+                ? { ...s, status: 'done' }
+                : { ...s, status: 'error', error: 'Generation was interrupted. Click Redo to retry.' };
+            } else {
+              normalized[eid] = s;
+            }
+          }
+          setRefStills(normalized);
+        }
 
         const shotFramesData = data.shot_key_frames as ShotKeyFrames | null;
         if (shotFramesData) setShotKeyFrames(shotFramesData);

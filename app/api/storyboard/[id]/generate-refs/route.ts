@@ -124,8 +124,14 @@ export async function POST(
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
 
-  const refStills: ReferenceStills = {};
-  for (const entity of entities) {
+  // Preserve any entity that already has candidates — only regenerate missing/errored ones.
+  const existing = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
+  const entitiesToGenerate = entities.filter(
+    (e) => !(existing[e.id]?.candidates.length),
+  );
+
+  const refStills: ReferenceStills = { ...existing };
+  for (const entity of entitiesToGenerate) {
     refStills[entity.id] = { status: 'pending', candidates: [], selected: null };
   }
   await getDb().storyboard.update({
@@ -143,16 +149,15 @@ export async function POST(
       }, 10000);
 
       try {
-        send({ type: 'start', total: entities.length });
+        send({ type: 'start', total: entitiesToGenerate.length });
 
         // Process entities SEQUENTIALLY (one at a time) to avoid rate limits.
         // Within each entity, 2 candidates run in parallel — just 2 concurrent
         // calls at any moment, no quota pressure.
-        // Timing: 11 entities × ~21s each ≈ 230s, well within the 300s limit.
-        for (let i = 0; i < entities.length; i++) {
-          const entity = entities[i]!;
+        for (let i = 0; i < entitiesToGenerate.length; i++) {
+          const entity = entitiesToGenerate[i]!;
           const entityStart = Date.now();
-          send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entities.length });
+          send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entitiesToGenerate.length });
 
           refStills[entity.id] = { status: 'generating', candidates: [], selected: null };
           await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
@@ -205,7 +210,7 @@ export async function POST(
         }
 
         await getDb().storyboard.update({ where: { id }, data: { status: 'REFS_PENDING' } });
-        send({ type: 'done', total: entities.length });
+        send({ type: 'done', total: entitiesToGenerate.length });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         send({ type: 'error', message });
