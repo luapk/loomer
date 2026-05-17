@@ -8,7 +8,7 @@ import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, ChevronDown, Check, ImageIcon,
-  Film, Download, ScanEye,
+  Film, Download, ScanEye, Pencil,
 } from 'lucide-react';
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
@@ -19,7 +19,7 @@ import type { DevStats } from '@/src/components/dev-stats';
 import { RegenShotButton } from './RegenShotButton';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
-type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'json';
+type Tab = 'storyboard' | 'shots' | 'images' | 'boards';
 
 type State =
   | { phase: 'empty' }
@@ -639,28 +639,35 @@ function HomePageInner() {
   const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done' ||
     state.phase === 'generating_shots' || state.phase === 'shots_done';
   const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done';
-  const hasJson = isLoaded;
+
+  // Completion state for green tick icons
+  const storyboardComplete = isLoaded;
+  const shotsComplete = isLoaded;
+  const imagesComplete = totalEntities > 0 && approvedCount === totalEntities;
+  const boardsComplete = state.phase === 'shots_done';
 
   const tabDefs = [
-    { id: 'storyboard' as Tab, label: 'Storyboard', enabled: hasStoryboard },
+    { id: 'storyboard' as Tab, label: 'Script Analysis', enabled: hasStoryboard, done: storyboardComplete },
     {
       id: 'shots' as Tab,
       label: isLoaded ? `Shot list (${(state as { parsedJson: { shots?: unknown[] } }).parsedJson?.shots?.length ?? 0})` : 'Shot list',
       enabled: hasShots,
+      done: shotsComplete,
     },
     {
       id: 'images' as Tab,
       label: totalEntities > 0 ? `Stills ${approvedCount}/${totalEntities}` : 'Stills',
       enabled: hasImages,
       spinner: state.phase === 'generating_refs',
+      done: imagesComplete,
     },
     {
       id: 'boards' as Tab,
       label: shotsTotal > 0 ? `Boards ${shotsDone}/${shotsTotal}` : 'Boards',
       enabled: hasBoards,
       spinner: shotsGenerating,
+      done: boardsComplete,
     },
-    { id: 'json' as Tab, label: 'JSON', enabled: hasJson },
   ];
 
   return (
@@ -707,9 +714,11 @@ function HomePageInner() {
                   : 'text-stone-500 hover:text-stone-700 cursor-pointer'
             }`}
           >
-            {'spinner' in tab && tab.spinner && (
+            {'spinner' in tab && tab.spinner ? (
               <Loader2 className="h-3 w-3 animate-spin" />
-            )}
+            ) : ('done' in tab && tab.done && activeTab !== tab.id) ? (
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
+            ) : null}
             {tab.label}
           </button>
         ))}
@@ -988,6 +997,12 @@ function HomePageInner() {
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
             }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
+            }}
           />
           <EntitySection
             title="Locations"
@@ -999,6 +1014,12 @@ function HomePageInner() {
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
             }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
+            }}
           />
           <EntitySection
             title="Props"
@@ -1009,6 +1030,12 @@ function HomePageInner() {
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
+            }}
+            onFineTuned={(entityId, candidates) => {
+              setRefStills((prev) => ({
+                ...prev,
+                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
+              }));
             }}
           />
         </div>
@@ -1049,6 +1076,16 @@ function HomePageInner() {
                 <span className={`text-xs ${continuityIssues.length === 0 ? 'text-green-700' : 'text-amber-700'}`}>
                   {continuitySummary}
                 </span>
+              )}
+              {'id' in state && Object.values(shotKeyFrames).some((f) => f.status === 'done' && f.url) && (
+                <a
+                  href={`/api/storyboard/${state.id}/download-zip`}
+                  download
+                  className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors bg-white/40"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download ZIP
+                </a>
               )}
               {continuityIssues.length > 0 && (
                 <button
@@ -1154,13 +1191,6 @@ function HomePageInner() {
         </div>
       )}
 
-      {/* JSON tab */}
-      {activeTab === 'json' && isLoaded && 'parsedJson' in state && (
-        <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[700px] whitespace-pre leading-relaxed border border-stone-100">
-          {JSON.stringify(state.parsedJson, null, 2)}
-        </pre>
-      )}
-
       <DevStatsPanel stats={devStats} />
     </div>
   );
@@ -1174,15 +1204,21 @@ function EntityCard({
   storyboardId,
   onApprove,
   onUploaded,
+  onFineTuned,
 }: {
   entity: { id: string; name: string };
   still: ReferenceStills[string] | undefined;
   storyboardId: string;
   onApprove: (entityId: string, url: string) => void;
   onUploaded: (entityId: string, url: string, candidates: string[]) => void;
+  onFineTuned: (entityId: string, candidates: string[]) => void;
 }) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fineTuneOpen, setFineTuneOpen] = useState(false);
+  const [fineTuneNotes, setFineTuneNotes] = useState('');
+  const [fineTuning, setFineTuning] = useState(false);
+  const [fineTuneError, setFineTuneError] = useState<string | null>(null);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -1200,6 +1236,30 @@ function EntityCard({
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleFineTune() {
+    setFineTuning(true);
+    setFineTuneError(null);
+    try {
+      const res = await fetch(`/api/storyboard/${storyboardId}/regen-ref`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entityId: entity.id, notes: fineTuneNotes }),
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        throw new Error(err.error ?? 'Fine-tune failed');
+      }
+      const data = await res.json() as { candidates: string[] };
+      onFineTuned(entity.id, data.candidates);
+      setFineTuneOpen(false);
+      setFineTuneNotes('');
+    } catch (err) {
+      setFineTuneError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setFineTuning(false);
     }
   }
 
@@ -1229,18 +1289,85 @@ function EntityCard({
             onChange={handleUpload}
           />
           {!hasError && (
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
-              title="Upload your own reference image"
-            >
-              {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
-              Upload
-            </button>
+            <>
+              <button
+                onClick={() => { setFineTuneOpen((v) => !v); setFineTuneError(null); }}
+                disabled={fineTuning}
+                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+                title="Fine-tune with director's notes"
+              >
+                <Pencil className="h-3 w-3" />
+                Fine-tune
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+                title="Upload your own reference image"
+              >
+                {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+                Upload
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {/* Fine-tune inline form */}
+      {fineTuneOpen && (
+        <div className="rounded-lg bg-stone-50 border border-stone-200 p-3 space-y-2">
+          <textarea
+            rows={2}
+            value={fineTuneNotes}
+            onChange={(e) => setFineTuneNotes(e.target.value)}
+            placeholder="e.g. make the jacket leather, shorter hair, add a beard…"
+            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+            disabled={fineTuning}
+          />
+          {fineTuneError && (
+            <p className="text-xs text-red-600 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+              {fineTuneError}
+            </p>
+          )}
+          <button
+            onClick={() => void handleFineTune()}
+            disabled={fineTuning || !fineTuneNotes.trim()}
+            className="flex items-center gap-1.5 text-xs font-medium text-white bg-stone-800 rounded-md px-2.5 py-1.5 hover:bg-stone-900 transition-colors disabled:opacity-50"
+          >
+            {fineTuning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
+            {fineTuning ? 'Regenerating…' : 'Regenerate with notes'}
+          </button>
+        </div>
+      )}
+
+      {/* Fine-tune inline form */}
+      {fineTuneOpen && (
+        <div className="rounded-lg bg-stone-50 border border-stone-200 p-3 space-y-2">
+          <textarea
+            rows={2}
+            value={fineTuneNotes}
+            onChange={(e) => setFineTuneNotes(e.target.value)}
+            placeholder="e.g. make the jacket leather, shorter hair, add a beard…"
+            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+            disabled={fineTuning}
+          />
+          {fineTuneError && (
+            <p className="text-xs text-red-600 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+              {fineTuneError}
+            </p>
+          )}
+          <button
+            onClick={() => void handleFineTune()}
+            disabled={fineTuning || !fineTuneNotes.trim()}
+            className="flex items-center gap-1.5 text-xs font-medium text-white bg-stone-800 rounded-md px-2.5 py-1.5 hover:bg-stone-900 transition-colors disabled:opacity-50"
+          >
+            {fineTuning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
+            {fineTuning ? 'Regenerating…' : 'Regenerate with notes'}
+          </button>
+        </div>
+      )}
 
       {!still && (
         <p className="text-xs text-stone-400 flex items-center gap-2 py-1">
@@ -1321,9 +1448,10 @@ interface EntitySectionProps {
   refStills: ReferenceStills;
   onApprove: (entityId: string, url: string) => void;
   onUploaded: (entityId: string, url: string, candidates: string[]) => void;
+  onFineTuned: (entityId: string, candidates: string[]) => void;
 }
 
-function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded }: EntitySectionProps) {
+function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded, onFineTuned }: EntitySectionProps) {
   if (entities.length === 0) return null;
 
   return (
@@ -1338,6 +1466,7 @@ function EntitySection({ title, entities, storyboardId, refStills, onApprove, on
             storyboardId={storyboardId}
             onApprove={onApprove}
             onUploaded={onUploaded}
+            onFineTuned={onFineTuned}
           />
         ))}
       </div>
