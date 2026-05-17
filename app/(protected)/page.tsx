@@ -1,22 +1,25 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Button } from '@/src/components/ui/button';
 import { Textarea } from '@/src/components/ui/textarea';
 import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, ChevronDown, Check, ImageIcon,
-  Film, Download, Pencil,
+  Film, Download, ScanEye,
 } from 'lucide-react';
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
+import type { ContinuityIssue, ContinuityCheckResult } from '@/app/api/storyboard/[id]/check-continuity/route';
 import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
 import type { DevStats } from '@/src/components/dev-stats';
+import { RegenShotButton } from './RegenShotButton';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
-type Tab = 'storyboard' | 'shots' | 'images' | 'boards';
+type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'json';
 
 type State =
   | { phase: 'empty' }
@@ -77,12 +80,12 @@ function useProgressMessage(active: boolean, milestones: { ms: number; text: str
   return milestones[index]?.text ?? milestones[milestones.length - 1]?.text ?? '';
 }
 
-export default function HomePage() {
+function HomePageInner() {
   const [script, setScript] = useState('');
   const [state, setState] = useState<State>({ phase: 'empty' });
 
   const [renderStyle, setRenderStyle] = useState<RenderStyle>('PHOTOREAL');
-  const [imageModel, setImageModel] = useState<string>('gemini-2.0-flash-preview-image-generation');
+  const [imageModel, setImageModel] = useState<string>('nano-banana-pro-preview');
   const [availableModels, setAvailableModels] = useState<ImageModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -93,6 +96,12 @@ export default function HomePage() {
   // Shot key frames
   const [shotKeyFrames, setShotKeyFrames] = useState<ShotKeyFrames>({});
   const [shotsGenerating, setShotsGenerating] = useState(false);
+  const refsInFlight = useRef(false);
+
+  // Continuity check
+  const [continuityIssues, setContinuityIssues] = useState<ContinuityIssue[]>([]);
+  const [continuityChecking, setContinuityChecking] = useState(false);
+  const [continuitySummary, setContinuitySummary] = useState<string | null>(null);
 
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
@@ -124,6 +133,84 @@ export default function HomePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded]);
 
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // Hydrate from an existing storyboard record when ?sb={id} is in the URL.
+  useEffect(() => {
+    const sbId = searchParams.get('sb');
+    if (!sbId) return;
+    // Clear the param so Back/refresh doesn't re-trigger
+    router.replace('/');
+
+    fetch(`/api/storyboard/${sbId}`)
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then((data: {
+        id: string;
+        title: string;
+        source_markdown: string;
+        parsed_json: unknown;
+        status: string;
+        render_style: RenderStyle;
+        image_model: string | null;
+        reference_stills: unknown;
+        shot_key_frames: unknown;
+      }) => {
+        if (data.render_style) setRenderStyle(data.render_style);
+        // Only restore the saved model if it's a known-good ID — stale records may
+        // have the old non-existent 'gemini-2.0-flash-preview-image-generation' name.
+        const KNOWN_IMAGE_MODELS = ['nano-banana-pro-preview', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image'];
+        if (data.image_model && KNOWN_IMAGE_MODELS.includes(data.image_model)) {
+          setImageModel(data.image_model);
+        }
+
+        const refStillsData = data.reference_stills as ReferenceStills | null;
+        if (refStillsData) {
+          // Normalize any entity left in 'generating' state (the previous session died).
+          // Entities with candidates → done; entities with none → error.
+          const normalized: ReferenceStills = {};
+          for (const [eid, s] of Object.entries(refStillsData)) {
+            if (s.status === 'generating') {
+              normalized[eid] = s.candidates.length > 0
+                ? { ...s, status: 'done' }
+                : { ...s, status: 'error', error: 'Generation was interrupted. Click Redo to retry.' };
+            } else {
+              normalized[eid] = s;
+            }
+          }
+          setRefStills(normalized);
+        }
+
+        const shotFramesData = data.shot_key_frames as ShotKeyFrames | null;
+        if (shotFramesData) setShotKeyFrames(shotFramesData);
+
+        if (data.source_markdown) setScript(data.source_markdown);
+
+        const hasParsed = !!data.parsed_json;
+        const hasShots = shotFramesData && Object.keys(shotFramesData).length > 0;
+        const hasApprovedRef = refStillsData &&
+          Object.values(refStillsData).some((s) => s.selected !== null);
+
+        if (hasShots) {
+          setState({ phase: 'shots_done', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
+          setActiveTab('boards');
+        } else if (hasApprovedRef || data.status === 'REFS_PENDING' || data.status === 'REFS_APPROVED') {
+          setState({ phase: 'refs_done', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
+          setActiveTab('images');
+        } else if (hasParsed) {
+          setState({ phase: 'parsed', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
+          setActiveTab('storyboard');
+        } else {
+          // DRAFT or failed — just pre-fill the script so user can retry
+          setState({ phase: 'empty' });
+        }
+      })
+      .catch(() => {
+        setState({ phase: 'error', message: 'Could not load storyboard.' });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function approveRef(storyboardId: string, entityId: string, url: string) {
     setRefStills((prev) => ({
       ...prev,
@@ -137,6 +224,8 @@ export default function HomePage() {
   }
 
   async function startGeneration(id: string) {
+    if (refsInFlight.current) return;
+    refsInFlight.current = true;
     // Save settings, then start the SSE generation stream
     await fetch(`/api/storyboard/${id}/settings`, {
       method: 'POST',
@@ -206,6 +295,17 @@ export default function HomePage() {
               ...prev,
               entities: [...prev.entities, { id: entityId, name: entityName, type: entityType, startMs: Date.now() }],
             }));
+          } else if (payload['type'] === 'entity_candidate') {
+            // A single candidate arrived — show it immediately without waiting for all 4
+            const entityId = payload['entityId'] as string;
+            const url = payload['url'] as string;
+            setRefStills((prev) => {
+              const existing = prev[entityId] ?? { status: 'generating', candidates: [], selected: null };
+              return {
+                ...prev,
+                [entityId]: { ...existing, candidates: [...existing.candidates, url] },
+              };
+            });
           } else if (payload['type'] === 'entity_done') {
             const entityId = payload['entityId'] as string;
             const candidates = payload['candidates'] as string[];
@@ -213,7 +313,7 @@ export default function HomePage() {
             setRefsCurrentEntity(null);
             setRefStills((prev) => ({
               ...prev,
-              [entityId]: { status: 'done', candidates, selected: null },
+              [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
             }));
             setDevStats((prev) => ({
               ...prev,
@@ -245,8 +345,20 @@ export default function HomePage() {
         }
       }
     } catch {
-      // stream closed — leave state as-is
+      // stream dropped — fall through to finally to reload from DB
     } finally {
+      refsInFlight.current = false;
+      // Reload reference_stills from DB — entity cards may still show "generating"
+      // if the SSE stream closed before all entity_done events arrived (e.g. timeout).
+      try {
+        const check = await fetch(`/api/storyboard/${id}`);
+        if (check.ok) {
+          const data = await check.json() as { reference_stills?: ReferenceStills };
+          if (data.reference_stills) {
+            setRefStills(data.reference_stills);
+          }
+        }
+      } catch { /* ignore */ }
       setState((prev) =>
         prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
       );
@@ -404,7 +516,29 @@ export default function HomePage() {
         }
       }
     } catch {
-      setState({ phase: 'error', message: 'Lost connection during parse.' });
+      // Connection dropped — check if the parse already completed in the DB
+      // before showing an error. This recovers from transient network blips
+      // where the server finished but the SSE stream closed before the client
+      // received the done event.
+      try {
+        const check = await fetch(`/api/storyboard/${id}`);
+        if (check.ok) {
+          const data = await check.json() as { status?: string; parsed_json?: unknown; title?: string };
+          if (data.status === 'PARSED' && data.parsed_json) {
+            setState({
+              phase: 'parsed',
+              id,
+              title: typeof data.title === 'string' ? data.title : title,
+              markdown,
+              parsedJson: data.parsed_json,
+              warnings: [],
+            });
+            setActiveTab('storyboard');
+            return;
+          }
+        }
+      } catch { /* ignore recovery errors, fall through to error state */ }
+      setState({ phase: 'error', message: 'Lost connection during parse. Please try again.' });
     }
   }
 
@@ -505,35 +639,28 @@ export default function HomePage() {
   const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done' ||
     state.phase === 'generating_shots' || state.phase === 'shots_done';
   const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done';
-
-  // Completion state for green tick icons
-  const storyboardComplete = isLoaded;
-  const shotsComplete = isLoaded;
-  const imagesComplete = totalEntities > 0 && approvedCount === totalEntities;
-  const boardsComplete = state.phase === 'shots_done';
+  const hasJson = isLoaded;
 
   const tabDefs = [
-    { id: 'storyboard' as Tab, label: 'Script Analysis', enabled: hasStoryboard, done: storyboardComplete },
+    { id: 'storyboard' as Tab, label: 'Storyboard', enabled: hasStoryboard },
     {
       id: 'shots' as Tab,
       label: isLoaded ? `Shot list (${(state as { parsedJson: { shots?: unknown[] } }).parsedJson?.shots?.length ?? 0})` : 'Shot list',
       enabled: hasShots,
-      done: shotsComplete,
     },
     {
       id: 'images' as Tab,
       label: totalEntities > 0 ? `Stills ${approvedCount}/${totalEntities}` : 'Stills',
       enabled: hasImages,
       spinner: state.phase === 'generating_refs',
-      done: imagesComplete,
     },
     {
       id: 'boards' as Tab,
       label: shotsTotal > 0 ? `Boards ${shotsDone}/${shotsTotal}` : 'Boards',
       enabled: hasBoards,
       spinner: shotsGenerating,
-      done: boardsComplete,
     },
+    { id: 'json' as Tab, label: 'JSON', enabled: hasJson },
   ];
 
   return (
@@ -580,11 +707,9 @@ export default function HomePage() {
                   : 'text-stone-500 hover:text-stone-700 cursor-pointer'
             }`}
           >
-            {'spinner' in tab && tab.spinner ? (
+            {'spinner' in tab && tab.spinner && (
               <Loader2 className="h-3 w-3 animate-spin" />
-            ) : ('done' in tab && tab.done && activeTab !== tab.id) ? (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
-            ) : null}
+            )}
             {tab.label}
           </button>
         ))}
@@ -863,12 +988,6 @@ export default function HomePage() {
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
             }}
-            onFineTuned={(entityId, candidates) => {
-              setRefStills((prev) => ({
-                ...prev,
-                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
-              }));
-            }}
           />
           <EntitySection
             title="Locations"
@@ -879,12 +998,6 @@ export default function HomePage() {
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
-            }}
-            onFineTuned={(entityId, candidates) => {
-              setRefStills((prev) => ({
-                ...prev,
-                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
-              }));
             }}
           />
           <EntitySection
@@ -897,12 +1010,6 @@ export default function HomePage() {
             onUploaded={(entityId, url, candidates) => {
               setRefStills((prev) => ({ ...prev, [entityId]: { status: 'done', candidates, selected: url } }));
             }}
-            onFineTuned={(entityId, candidates) => {
-              setRefStills((prev) => ({
-                ...prev,
-                [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
-              }));
-            }}
           />
         </div>
       )}
@@ -910,21 +1017,50 @@ export default function HomePage() {
       {/* Boards tab */}
       {activeTab === 'boards' && isLoaded && 'parsedJson' in state && (
         <div className="space-y-4">
-          {/* Toolbar */}
+          {/* Continuity check toolbar */}
           {shotsTotal > 0 && (
-            <div className="flex items-center gap-3 flex-wrap">
-              {'id' in state && Object.values(shotKeyFrames).some((f) => f.status === 'done' && f.url) && (
-                <a
-                  href={`/api/storyboard/${state.id}/download-zip`}
-                  download
-                  className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors bg-white/40"
+            <div className="flex items-center gap-3">
+              <button
+                onClick={async () => {
+                  if (!('id' in state)) return;
+                  setContinuityChecking(true);
+                  setContinuityIssues([]);
+                  setContinuitySummary(null);
+                  try {
+                    const res = await fetch(`/api/storyboard/${state.id}/check-continuity`, { method: 'POST' });
+                    if (res.ok) {
+                      const data = await res.json() as ContinuityCheckResult;
+                      setContinuityIssues(data.issues);
+                      setContinuitySummary(data.summary);
+                    }
+                  } finally {
+                    setContinuityChecking(false);
+                  }
+                }}
+                disabled={continuityChecking}
+                className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors disabled:opacity-50 bg-white/40"
+              >
+                {continuityChecking
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <ScanEye className="h-3.5 w-3.5" />}
+                {continuityChecking ? 'Checking continuity…' : 'Check continuity'}
+              </button>
+              {continuitySummary && !continuityChecking && (
+                <span className={`text-xs ${continuityIssues.length === 0 ? 'text-green-700' : 'text-amber-700'}`}>
+                  {continuitySummary}
+                </span>
+              )}
+              {continuityIssues.length > 0 && (
+                <button
+                  onClick={() => { setContinuityIssues([]); setContinuitySummary(null); }}
+                  className="text-xs text-stone-400 hover:text-stone-600"
                 >
-                  <Download className="h-3.5 w-3.5" />
-                  Download ZIP
-                </a>
+                  Clear
+                </button>
               )}
             </div>
           )}
+
           {shotsTotal === 0 && !shotsGenerating && (
             <div className="flex flex-col items-center justify-center py-16 text-stone-400 space-y-3">
               <Film className="h-8 w-8" />
@@ -937,31 +1073,61 @@ export default function HomePage() {
             const frame = shotKeyFrames[n];
             return (
               <div key={n} className="glass rounded-xl overflow-hidden">
-                {/* Image area */}
-                {frame?.status === 'done' && frame.url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={frame.url}
-                    alt={`Shot ${n} — ${shot.descriptor as string}`}
-                    className="w-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full aspect-video bg-stone-100 flex items-center justify-center">
-                    {frame?.status === 'generating' ? (
-                      <div className="flex items-center gap-2 text-stone-400 text-xs">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Generating…
-                      </div>
-                    ) : frame?.status === 'error' ? (
-                      <div className="flex items-center gap-2 text-red-400 text-xs px-4 text-center">
-                        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                        {frame.error ?? 'Generation failed'}
-                      </div>
-                    ) : (
-                      <div className="text-stone-300 text-xs">Pending</div>
-                    )}
-                  </div>
-                )}
+                {/* Image area — relative so the regen button can be absolutely positioned */}
+                <div className="relative">
+                  {frame?.status === 'done' && frame.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={frame.url}
+                      alt={`Shot ${n} — ${shot.descriptor as string}`}
+                      className="w-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full aspect-video bg-stone-100 flex items-center justify-center">
+                      {frame?.status === 'generating' ? (
+                        <div className="flex items-center gap-2 text-stone-400 text-xs">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Generating…
+                        </div>
+                      ) : frame?.status === 'error' ? (
+                        <div className="flex items-center gap-2 text-red-400 text-xs px-4 text-center">
+                          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                          {frame.error ?? 'Generation failed'}
+                        </div>
+                      ) : (
+                        <div className="text-stone-300 text-xs">Pending</div>
+                      )}
+                    </div>
+                  )}
+                  {/* Regen button — only show once there is a frame (done or error) */}
+                  {'id' in state && (frame?.status === 'done' || frame?.status === 'error') && (
+                    <div className="absolute top-2 right-2">
+                      <RegenShotButton
+                        storyboardId={state.id}
+                        shotNumber={shot.shot_number as number}
+                        onSuccess={(url) => {
+                          setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'done', url } }));
+                          // Clear any continuity issues for this shot since it was regenerated
+                          setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== (shot.shot_number as number)));
+                        }}
+                      />
+                    </div>
+                  )}
+                  {/* Continuity issue badge */}
+                  {continuityIssues.filter((i) => i.shot_number === (shot.shot_number as number)).map((issue, idx) => (
+                    <div
+                      key={idx}
+                      className={`absolute bottom-2 left-2 right-12 rounded-lg px-2.5 py-1.5 text-xs flex items-start gap-1.5 ${
+                        issue.severity === 'error'
+                          ? 'bg-red-900/80 text-red-100'
+                          : 'bg-amber-800/80 text-amber-100'
+                      }`}
+                    >
+                      <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                      <span className="leading-snug">{issue.description}</span>
+                    </div>
+                  ))}
+                </div>
                 {/* Metadata */}
                 <div className="p-3 space-y-1">
                   <div className="flex items-baseline gap-2">
@@ -988,6 +1154,13 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* JSON tab */}
+      {activeTab === 'json' && isLoaded && 'parsedJson' in state && (
+        <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[700px] whitespace-pre leading-relaxed border border-stone-100">
+          {JSON.stringify(state.parsedJson, null, 2)}
+        </pre>
+      )}
+
       <DevStatsPanel stats={devStats} />
     </div>
   );
@@ -995,31 +1168,21 @@ export default function HomePage() {
 
 // ─── EntitySection ────────────────────────────────────────────────────────────
 
-// ─── EntityCard ────────────────────────────────────────────────────────────────
-
 function EntityCard({
   entity,
   still,
   storyboardId,
   onApprove,
   onUploaded,
-  onFineTuned,
 }: {
   entity: { id: string; name: string };
   still: ReferenceStills[string] | undefined;
   storyboardId: string;
   onApprove: (entityId: string, url: string) => void;
   onUploaded: (entityId: string, url: string, candidates: string[]) => void;
-  onFineTuned: (entityId: string, candidates: string[]) => void;
 }) {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Fine-tune state
-  const [fineTuneOpen, setFineTuneOpen] = useState(false);
-  const [fineTuneNotes, setFineTuneNotes] = useState('');
-  const [fineTuning, setFineTuning] = useState(false);
-  const [fineTuneError, setFineTuneError] = useState<string | null>(null);
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -1037,30 +1200,6 @@ function EntityCard({
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  }
-
-  async function handleFineTune() {
-    setFineTuning(true);
-    setFineTuneError(null);
-    try {
-      const res = await fetch(`/api/storyboard/${storyboardId}/regen-ref`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entityId: entity.id, notes: fineTuneNotes }),
-      });
-      if (!res.ok) {
-        const err = await res.json() as { error?: string };
-        throw new Error(err.error ?? 'Fine-tune failed');
-      }
-      const data = await res.json() as { candidates: string[] };
-      onFineTuned(entity.id, data.candidates);
-      setFineTuneOpen(false);
-      setFineTuneNotes('');
-    } catch (err) {
-      setFineTuneError(err instanceof Error ? err.message : 'Something went wrong');
-    } finally {
-      setFineTuning(false);
     }
   }
 
@@ -1090,57 +1229,18 @@ function EntityCard({
             onChange={handleUpload}
           />
           {!hasError && (
-            <>
-              <button
-                onClick={() => { setFineTuneOpen((v) => !v); setFineTuneError(null); }}
-                disabled={fineTuning}
-                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
-                title="Fine-tune with director's notes"
-              >
-                <Pencil className="h-3 w-3" />
-                Fine-tune
-              </button>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-                className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
-                title="Upload your own reference image"
-              >
-                {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
-                Upload
-              </button>
-            </>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+              title="Upload your own reference image"
+            >
+              {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+              Upload
+            </button>
           )}
         </div>
       </div>
-
-      {/* Fine-tune inline form */}
-      {fineTuneOpen && (
-        <div className="rounded-lg bg-stone-50 border border-stone-200 p-3 space-y-2">
-          <textarea
-            rows={2}
-            value={fineTuneNotes}
-            onChange={(e) => setFineTuneNotes(e.target.value)}
-            placeholder="e.g. make the jacket leather, shorter hair, add a beard…"
-            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
-            disabled={fineTuning}
-          />
-          {fineTuneError && (
-            <p className="text-xs text-red-600 flex items-center gap-1">
-              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-              {fineTuneError}
-            </p>
-          )}
-          <button
-            onClick={() => void handleFineTune()}
-            disabled={fineTuning || !fineTuneNotes.trim()}
-            className="flex items-center gap-1.5 text-xs font-medium text-white bg-stone-800 rounded-md px-2.5 py-1.5 hover:bg-stone-900 transition-colors disabled:opacity-50"
-          >
-            {fineTuning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
-            {fineTuning ? 'Regenerating…' : 'Regenerate with notes'}
-          </button>
-        </div>
-      )}
 
       {!still && (
         <p className="text-xs text-stone-400 flex items-center gap-2 py-1">
@@ -1221,10 +1321,9 @@ interface EntitySectionProps {
   refStills: ReferenceStills;
   onApprove: (entityId: string, url: string) => void;
   onUploaded: (entityId: string, url: string, candidates: string[]) => void;
-  onFineTuned: (entityId: string, candidates: string[]) => void;
 }
 
-function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded, onFineTuned }: EntitySectionProps) {
+function EntitySection({ title, entities, storyboardId, refStills, onApprove, onUploaded }: EntitySectionProps) {
   if (entities.length === 0) return null;
 
   return (
@@ -1239,10 +1338,17 @@ function EntitySection({ title, entities, storyboardId, refStills, onApprove, on
             storyboardId={storyboardId}
             onApprove={onApprove}
             onUploaded={onUploaded}
-            onFineTuned={onFineTuned}
           />
         ))}
       </div>
     </div>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense>
+      <HomePageInner />
+    </Suspense>
   );
 }

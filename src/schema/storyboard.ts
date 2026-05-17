@@ -236,6 +236,8 @@ export const ShotSoundDesignSchema = z.object({
   music: z.string().nullable().describe('Music notes (usually null — score is post).'),
 });
 
+// veo/kling durations are deferred — only needed at video generation time,
+// not for stills. Optional to keep parse lean and avoid validation failures.
 export const ShotDurationSchema = z.object({
   veo: z
     .number()
@@ -243,14 +245,16 @@ export const ShotDurationSchema = z.object({
     .refine((n) => [4, 6, 8].includes(n), {
       message: 'Veo 3.1 supports 4, 6, or 8 second clips.',
     })
-    .describe('Veo clip duration: 4, 6, or 8 seconds.'),
+    .optional()
+    .describe('Veo clip duration: 4, 6, or 8 seconds. Populated at video generation time.'),
   kling: z
     .number()
     .int()
     .refine((n) => [5, 10].includes(n), {
       message: 'Kling supports 5 or 10 second clips.',
     })
-    .describe('Kling clip duration: 5 or 10 seconds.'),
+    .optional()
+    .describe('Kling clip duration: 5 or 10 seconds. Populated at video generation time.'),
 });
 
 export const ShotSchema = z.object({
@@ -276,7 +280,7 @@ export const ShotSchema = z.object({
 
   sound_design: ShotSoundDesignSchema,
 
-  duration: ShotDurationSchema,
+  duration: ShotDurationSchema.optional(),
 
   chain_instruction: z
     .string()
