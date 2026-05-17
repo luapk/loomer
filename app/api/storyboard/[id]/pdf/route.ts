@@ -359,40 +359,22 @@ async function buildGridPages(
         });
       }
 
-      // 3. Action line below image — guard against overflow into next row
-      const TEXT_LINE_H = 11;
-      const DIALOGUE_LINE_H = 9.5;
-      const TEXT_MARGIN = 4; // minimum gap above cell bottom
+      // 3. Descriptor below image
+      const descBelow = safe(shot.descriptor);
+      const descBelowLines = wrapText(descBelow, cellW, fonts.regular, 7);
       let textCursorY = imageBottomY - 4;
-      const actionLines = wrapText(safe(shot.action_beat), cellW, fonts.regular, 7.5);
-      for (const line of actionLines) {
+      const TEXT_LINE_H = 10;
+      const TEXT_MARGIN = 2;
+      for (const line of descBelowLines) {
         if (textCursorY - TEXT_LINE_H < cellBottomY + TEXT_MARGIN) break;
         page.drawText(line, {
           x: cellX,
           y: textCursorY,
-          size: 7.5,
+          size: 7,
           font: fonts.regular,
           color: rgb(0.2, 0.2, 0.2),
         });
         textCursorY -= TEXT_LINE_H;
-      }
-
-      // 4. Dialogue if present — only if space remains
-      if (shot.dialogue_vo && textCursorY - DIALOGUE_LINE_H >= cellBottomY + TEXT_MARGIN) {
-        textCursorY -= 2;
-        const dialogueText = safe(`"${shot.dialogue_vo}"`);
-        const dialogueLines = wrapText(dialogueText, cellW, fonts.bold, 6.5);
-        for (const line of dialogueLines) {
-          if (textCursorY - DIALOGUE_LINE_H < cellBottomY + TEXT_MARGIN) break;
-          page.drawText(line, {
-            x: cellX,
-            y: textCursorY,
-            size: 6.5,
-            font: fonts.italic,
-            color: rgb(0.4, 0.4, 0.4),
-          });
-          textCursorY -= DIALOGUE_LINE_H;
-        }
       }
     }
 

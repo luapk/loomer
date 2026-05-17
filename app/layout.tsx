@@ -20,13 +20,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   alt="Loomer"
                   width={911}
                   height={443}
-                  style={{ height: 32, width: 'auto' }}
+                  style={{ height: 64, width: 'auto' }}
                   priority
                 />
               </a>
-              <nav className="flex items-center gap-6 text-sm text-stone-500">
-                <a href="/list" className="hover:text-stone-900 transition-colors">
+              <nav
+                className="flex items-center gap-8"
+                style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--ink-low)' }}
+              >
+                <a href="/list" className="hover:text-[var(--ink)] transition-colors">
                   Projects
+                </a>
+                <a href="/?how=1" className="hover:text-[var(--ink)] transition-colors">
+                  How It Works
                 </a>
               </nav>
             </div>

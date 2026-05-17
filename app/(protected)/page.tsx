@@ -795,12 +795,6 @@ function HomePageInner() {
               <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, lineHeight: 1.5, color: 'var(--ink-dim)' }}>
                 Paste a script, premise, or beat list — Loomer breaks it into shots, sources reference stills, and renders cinematic key frames ready for client delivery.
               </p>
-              <button
-                onClick={() => setShowHowItWorks(true)}
-                style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--ink-low)', textDecoration: 'underline', textUnderlineOffset: 3, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-              >
-                How it works
-              </button>
             </div>
           )}
           {'id' in state && (
@@ -812,7 +806,12 @@ function HomePageInner() {
             {state.warnings.length > 0 && (
               <Badge variant="warning">{state.warnings.length} warnings</Badge>
             )}
-            <Badge variant="success">Parsed</Badge>
+            <button
+              onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
+              style={{ background: '#111', color: '#fff', fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.16em', textTransform: 'uppercase', border: 'none', padding: '7px 14px', cursor: 'pointer' }}
+            >
+              New Project
+            </button>
           </div>
         )}
       </div>
@@ -927,13 +926,6 @@ function HomePageInner() {
           {/* Action row */}
           <div className="flex items-center justify-between pt-1 flex-wrap gap-3">
             <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
-              >
-                New storyboard
-              </Button>
               <button
                 type="button"
                 onClick={() => setNotifyWhenDone((v) => !v)}
@@ -988,17 +980,6 @@ function HomePageInner() {
                 )
               )}
 
-              {/* PDF download — once at least one board is done */}
-              {shotsDone > 0 && !shotsGenerating && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => { window.open(`/api/storyboard/${state.id}/pdf`, '_blank'); }}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Download PDF
-                </Button>
-              )}
             </div>
           </div>
         </div>
@@ -1194,9 +1175,18 @@ function HomePageInner() {
       {/* Boards tab */}
       {activeTab === 'boards' && isLoaded && 'parsedJson' in state && (
         <div className="space-y-4">
-          {/* Continuity check toolbar */}
+          {/* Boards toolbar */}
           {shotsTotal > 0 && (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              {'id' in state && shotsDone > 0 && !shotsGenerating && (
+                <button
+                  onClick={() => { window.open(`/api/storyboard/${state.id}/pdf`, '_blank'); }}
+                  className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors bg-white/40"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download PDF
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (!('id' in state)) return;
@@ -1255,7 +1245,7 @@ function HomePageInner() {
                     <img
                       src={frame.url}
                       alt={`Shot ${n} — ${shot.descriptor as string}`}
-                      className="w-full object-cover"
+                      className="w-full aspect-video object-cover"
                     />
                   ) : (
                     <div className="w-full aspect-video bg-stone-100 flex items-center justify-center">
