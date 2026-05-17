@@ -293,46 +293,8 @@ async function buildGridPages(
       const cellTopY = gridTopY - row * (cellH + ROW_GAP);
       const cellBottomY = cellTopY - cellH;
 
-      // 1. Meta row (height 10pt) at top of cell
-      const metaY = cellTopY - 8; // baseline of meta text
-
-      const shotNum = String(shot.shot_number).padStart(2, '0');
-      page.drawText(shotNum, {
-        x: cellX,
-        y: metaY,
-        size: 8,
-        font: fonts.bold,
-        color: INK,
-      });
-
-      // Descriptor truncated to 30 chars — centred
-      const descText = safe(
-        shot.descriptor.length > 30
-          ? shot.descriptor.slice(0, 30)
-          : shot.descriptor,
-      );
-      const descW = fonts.regular.widthOfTextAtSize(descText, 7);
-      page.drawText(descText, {
-        x: cellX + (cellW - descW) / 2,
-        y: metaY,
-        size: 7,
-        font: fonts.regular,
-        color: MID,
-      });
-
-      // Scale + lens — right-aligned
-      const scaleLens = safe(`${shot.grammar.scale} · ${shot.grammar.lens}`);
-      const scaleLensW = fonts.regular.widthOfTextAtSize(scaleLens, 7);
-      page.drawText(scaleLens, {
-        x: cellX + cellW - scaleLensW,
-        y: metaY,
-        size: 7,
-        font: fonts.regular,
-        color: MID,
-      });
-
-      // 2. Image area (imgH tall), below meta row with 3pt gap
-      const imageTopY = cellTopY - 10 - 3;
+      // Image area — fills cell from top, 16:9
+      const imageTopY = cellTopY;
       const imageBottomY = imageTopY - imgH;
 
       // Dark grey placeholder
@@ -359,13 +321,19 @@ async function buildGridPages(
         });
       }
 
-      // 3. Descriptor below image
-      const descBelow = safe(shot.descriptor);
-      const descBelowLines = wrapText(descBelow, cellW, fonts.regular, 7);
-      let textCursorY = imageBottomY - 4;
+      // Text below image — shot number + descriptor, then VO
       const TEXT_LINE_H = 10;
+      const DIALOGUE_LINE_H = 9;
       const TEXT_MARGIN = 2;
-      for (const line of descBelowLines) {
+      // 8pt gap between image bottom and first text line
+      let textCursorY = imageBottomY - 8;
+
+      // Shot number + descriptor on one line
+      const shotNum = String(shot.shot_number).padStart(2, '0');
+      const descBelow = safe(shot.descriptor);
+      const metaLine = `${shotNum}  ${descBelow}`;
+      const metaLines = wrapText(metaLine, cellW, fonts.regular, 7);
+      for (const line of metaLines) {
         if (textCursorY - TEXT_LINE_H < cellBottomY + TEXT_MARGIN) break;
         page.drawText(line, {
           x: cellX,
@@ -375,6 +343,23 @@ async function buildGridPages(
           color: rgb(0.2, 0.2, 0.2),
         });
         textCursorY -= TEXT_LINE_H;
+      }
+
+      // VO / dialogue in bold italic beneath descriptor
+      if (shot.dialogue_vo) {
+        const voText = safe(`"${shot.dialogue_vo}"`);
+        const voLines = wrapText(voText, cellW, fonts.italic, 6.5);
+        for (const line of voLines) {
+          if (textCursorY - DIALOGUE_LINE_H < cellBottomY + TEXT_MARGIN) break;
+          page.drawText(line, {
+            x: cellX,
+            y: textCursorY,
+            size: 6.5,
+            font: fonts.italic,
+            color: rgb(0.35, 0.35, 0.35),
+          });
+          textCursorY -= DIALOGUE_LINE_H;
+        }
       }
     }
 

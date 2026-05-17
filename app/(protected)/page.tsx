@@ -788,10 +788,7 @@ function HomePageInner() {
               : <em>Storyboards that feel like film.</em>}
           </h1>
           {state.phase === 'empty' && (
-            <div className="mt-3 space-y-3" style={{ maxWidth: 480 }}>
-              <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 16, lineHeight: 1.55, color: 'var(--ink-mid)', fontStyle: 'italic' }}>
-                Paste a script, premise, or beat list — Loomer handles the rest.
-              </p>
+            <div className="mt-3" style={{ maxWidth: 480 }}>
               <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, lineHeight: 1.5, color: 'var(--ink-dim)' }}>
                 Paste a script, premise, or beat list — Loomer breaks it into shots, sources reference stills, and renders cinematic key frames ready for client delivery.
               </p>
@@ -810,7 +807,7 @@ function HomePageInner() {
               onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
               style={{ background: '#111', color: '#fff', fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.16em', textTransform: 'uppercase', border: 'none', padding: '7px 14px', cursor: 'pointer' }}
             >
-              New Project
+              +NEW
             </button>
           </div>
         )}
@@ -938,6 +935,18 @@ function HomePageInner() {
               >
                 {notifyWhenDone ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
               </button>
+              {/* Check continuity — icon button, only once boards exist */}
+              {hasBoards && (
+                <button
+                  type="button"
+                  onClick={() => { if ('id' in state) void runContinuityCheck(state.id, true); }}
+                  disabled={continuityChecking}
+                  title={continuityChecking ? 'Checking continuity…' : 'Check continuity'}
+                  className="h-8 w-8 flex items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-400 hover:border-stone-400 hover:text-stone-700 transition-colors disabled:opacity-50"
+                >
+                  {continuityChecking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanEye className="h-3.5 w-3.5" />}
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {/* Ref generation */}
@@ -954,6 +963,7 @@ function HomePageInner() {
                   variant="secondary"
                   size="sm"
                 >
+                  <ImageIcon className="h-3.5 w-3.5" />
                   {state.phase === 'refs_done' || state.phase === 'generating_shots' || state.phase === 'shots_done'
                     ? 'Redo stills' : 'Generate stills'}
                 </Button>
@@ -1187,24 +1197,6 @@ function HomePageInner() {
                   Download PDF
                 </button>
               )}
-              <button
-                onClick={() => {
-                  if (!('id' in state)) return;
-                  void runContinuityCheck(state.id, true);
-                }}
-                disabled={continuityChecking}
-                className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors disabled:opacity-50 bg-white/40"
-              >
-                {continuityChecking
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <ScanEye className="h-3.5 w-3.5" />}
-                {continuityChecking ? 'Checking continuity…' : 'Check continuity'}
-              </button>
-              {continuitySummary && !continuityChecking && (
-                <span className={`text-xs ${continuityIssues.length === 0 ? 'text-green-700' : 'text-amber-700'}`}>
-                  {continuitySummary}
-                </span>
-              )}
               {'id' in state && Object.values(shotKeyFrames).some((f) => f.status === 'done' && f.url) && (
                 <a
                   href={`/api/storyboard/${state.id}/download-zip`}
@@ -1214,6 +1206,11 @@ function HomePageInner() {
                   <Download className="h-3.5 w-3.5" />
                   Download ZIP
                 </a>
+              )}
+              {continuitySummary && !continuityChecking && (
+                <span className={`text-xs ${continuityIssues.length === 0 ? 'text-green-700' : 'text-amber-700'}`}>
+                  {continuitySummary}
+                </span>
               )}
               {continuityIssues.length > 0 && (
                 <button
