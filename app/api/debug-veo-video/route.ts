@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { head } from '@vercel/blob';
 
 export const dynamic = 'force-dynamic';
@@ -23,13 +23,19 @@ export async function GET(request: NextRequest) {
     blobUrl = `${BLOB_BASE}/${blobPath}`;
   }
 
-  // Proxy the video bytes so the response comes from loomer-eight.vercel.app
-  // (bypasses Blob host restriction for external clients)
   const vidRes = await fetch(blobUrl);
   if (!vidRes.ok) {
     return new Response(`Video not ready yet (${vidRes.status})`, { status: 404 });
   }
 
+  // ?format=base64 returns JSON so MCP tools can retrieve the video data
+  const fmt = request.nextUrl.searchParams.get('format');
+  if (fmt === 'base64') {
+    const buf = Buffer.from(await vidRes.arrayBuffer());
+    return NextResponse.json({ shotNumber, mimeType: 'video/mp4', sizeBytes: buf.length, data: buf.toString('base64') });
+  }
+
+  // Default: proxy the video bytes through loomer domain (bypasses Blob host restriction)
   return new Response(vidRes.body, {
     headers: {
       'Content-Type': 'video/mp4',
