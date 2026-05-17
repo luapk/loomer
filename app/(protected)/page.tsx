@@ -16,7 +16,7 @@ import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
 import type { DevStats } from '@/src/components/dev-stats';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
-type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'json';
+type Tab = 'storyboard' | 'shots' | 'images' | 'boards';
 
 type State =
   | { phase: 'empty' }
@@ -505,28 +505,35 @@ export default function HomePage() {
   const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done' ||
     state.phase === 'generating_shots' || state.phase === 'shots_done';
   const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done';
-  const hasJson = isLoaded;
+
+  // Completion state for green tick icons
+  const storyboardComplete = isLoaded;
+  const shotsComplete = isLoaded;
+  const imagesComplete = totalEntities > 0 && approvedCount === totalEntities;
+  const boardsComplete = state.phase === 'shots_done';
 
   const tabDefs = [
-    { id: 'storyboard' as Tab, label: 'Storyboard', enabled: hasStoryboard },
+    { id: 'storyboard' as Tab, label: 'Script Analysis', enabled: hasStoryboard, done: storyboardComplete },
     {
       id: 'shots' as Tab,
       label: isLoaded ? `Shot list (${(state as { parsedJson: { shots?: unknown[] } }).parsedJson?.shots?.length ?? 0})` : 'Shot list',
       enabled: hasShots,
+      done: shotsComplete,
     },
     {
       id: 'images' as Tab,
       label: totalEntities > 0 ? `Stills ${approvedCount}/${totalEntities}` : 'Stills',
       enabled: hasImages,
       spinner: state.phase === 'generating_refs',
+      done: imagesComplete,
     },
     {
       id: 'boards' as Tab,
       label: shotsTotal > 0 ? `Boards ${shotsDone}/${shotsTotal}` : 'Boards',
       enabled: hasBoards,
       spinner: shotsGenerating,
+      done: boardsComplete,
     },
-    { id: 'json' as Tab, label: 'JSON', enabled: hasJson },
   ];
 
   return (
@@ -573,9 +580,11 @@ export default function HomePage() {
                   : 'text-stone-500 hover:text-stone-700 cursor-pointer'
             }`}
           >
-            {'spinner' in tab && tab.spinner && (
+            {'spinner' in tab && tab.spinner ? (
               <Loader2 className="h-3 w-3 animate-spin" />
-            )}
+            ) : ('done' in tab && tab.done && activeTab !== tab.id) ? (
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
+            ) : null}
             {tab.label}
           </button>
         ))}
@@ -932,13 +941,6 @@ export default function HomePage() {
             );
           })}
         </div>
-      )}
-
-      {/* JSON tab */}
-      {activeTab === 'json' && isLoaded && 'parsedJson' in state && (
-        <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[700px] whitespace-pre leading-relaxed border border-stone-100">
-          {JSON.stringify(state.parsedJson, null, 2)}
-        </pre>
       )}
 
       <DevStatsPanel stats={devStats} />

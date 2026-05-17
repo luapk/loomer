@@ -274,8 +274,8 @@ async function buildShotPage(
   const metaLine = [
     shot.grammar.scale,
     shot.grammar.lens,
-    `Veo ${shot.duration.veo}s`,
-  ].join('  ·  ');
+    shot.duration?.veo != null ? `Veo ${shot.duration.veo}s` : null,
+  ].filter(Boolean).join('  ·  ');
 
   page.drawText(metaLine, {
     x: MARGIN,

@@ -252,7 +252,7 @@ export async function POST(
               const blob = await put(
                 `${id}/shots/${shot.shot_number}.${ext}`,
                 buffer,
-                { access: 'public', contentType: img.mimeType },
+                { access: 'public', allowOverwrite: true, contentType: img.mimeType },
               );
 
               const durationMs = Date.now() - shotStart;

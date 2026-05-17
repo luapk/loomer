@@ -19,47 +19,76 @@ function buildPrompt(
 ): string {
   const base = entity.reference_still_prompt;
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${base}\n\nStyle: ${WATERCOLOUR_STYLE}`;
+    return `Style: ${WATERCOLOUR_STYLE}\n\n${base}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${base}\n\nStyle: ${styleParts.join(' ')}`;
+  return `Style: ${styleParts.join(' ')}\n\n${base}`;
 }
 
-// Generate one image, retrying on 429 with exponential backoff (up to 3 attempts).
+// Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
 // Returns base64 bytes + mime type, or null if the response contains no image part.
+// Returns image data, or throws a descriptive error explaining why no image was produced.
 async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-): Promise<{ data: string; mimeType: string } | null> {
+): Promise<{ data: string; mimeType: string }> {
   const delays = [5000, 15000, 30000];
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
       const response = await ai.models.generateContent({
         model,
         contents: prompt,
-        config: { responseModalities: [Modality.IMAGE] },
+        config: { responseModalities: [Modality.IMAGE, Modality.TEXT] },
       });
-      for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+      const candidate = response.candidates?.[0];
+      for (const part of candidate?.content?.parts ?? []) {
         if (part.inlineData?.data) {
           return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
         }
       }
-      return null;
+      // Surface why there's no image: finish reason, safety ratings, or any text the model returned
+      const finishReason = candidate?.finishReason ?? 'UNKNOWN';
+      const textParts = (candidate?.content?.parts ?? [])
+        .filter((p) => p.text)
+        .map((p) => p.text)
+        .join(' ')
+        .slice(0, 200);
+      const detail = textParts ? `Model said: "${textParts}"` : `Finish reason: ${finishReason}`;
+      throw new Error(`No image in response (model: ${model}). ${detail}`);
     } catch (err) {
-      const is429 = err instanceof Error && err.message.includes('"code":429');
-      if (is429 && attempt < delays.length) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isRetryable = msg.includes('"code":429') || msg.includes('"code":400');
+      if (isRetryable && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
       }
       throw err;
     }
   }
-  return null;
+  // Unreachable but required for TypeScript
+  throw new Error('generateOneImage: exhausted retries');
+}
+
+// Upload a single candidate image to Vercel Blob and return its public URL.
+async function uploadCandidate(
+  storyboardId: string,
+  entityId: string,
+  index: number,
+  img: { data: string; mimeType: string },
+): Promise<string> {
+  const buffer = Buffer.from(img.data, 'base64');
+  const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+  const blob = await put(
+    `${storyboardId}/refs/${entityId}/${index}.${ext}`,
+    buffer,
+    { access: 'public', contentType: img.mimeType },
+  );
+  return blob.url;
 }
 
 export async function POST(
@@ -105,8 +134,14 @@ export async function POST(
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
 
-  const refStills: ReferenceStills = {};
-  for (const entity of entities) {
+  // Preserve any entity that already has candidates — only regenerate missing/errored ones.
+  const existing = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
+  const entitiesToGenerate = entities.filter(
+    (e) => !(existing[e.id]?.candidates.length),
+  );
+
+  const refStills: ReferenceStills = { ...existing };
+  for (const entity of entitiesToGenerate) {
     refStills[entity.id] = { status: 'pending', candidates: [], selected: null };
   }
   await getDb().storyboard.update({
@@ -124,57 +159,64 @@ export async function POST(
       }, 10000);
 
       try {
-        send({ type: 'start', total: entities.length });
+        send({ type: 'start', total: entitiesToGenerate.length });
 
-        // All entities generate in parallel — drops N×15s to ~15s flat.
-        // Each entity independently updates refStills and writes to DB as it completes.
-        await Promise.all(
-          entities.map(async (entity, i) => {
-            const entityStart = Date.now();
-            send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entities.length });
+        // Process entities SEQUENTIALLY (one at a time) to avoid rate limits.
+        // Within each entity, 2 candidates run in parallel — just 2 concurrent
+        // calls at any moment, no quota pressure.
+        for (let i = 0; i < entitiesToGenerate.length; i++) {
+          const entity = entitiesToGenerate[i]!;
+          const entityStart = Date.now();
+          send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entitiesToGenerate.length });
 
-            refStills[entity.id] = { status: 'generating', candidates: [], selected: null };
+          refStills[entity.id] = { status: 'generating', candidates: [], selected: null };
+          await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
+
+          try {
+            const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
+
+            // 2 candidates in parallel per entity: small enough fan-out (2 concurrent
+            // calls max) that rate limiting is not a concern.
+            const candidateResults = await Promise.allSettled(
+              [0, 1].map(async (j) => {
+                const img = await generateOneImage(ai, model, prompt);
+                const url = await uploadCandidate(id, entity.id, j, img);
+                send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
+                return url;
+              }),
+            );
+
+            const candidates = candidateResults
+              .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
+              .map((r) => r.value);
+
+            // Collect actual rejection reasons — these are the real API errors
+            const rejectionMsgs = candidateResults
+              .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+              .map((r) => r.reason instanceof Error ? r.reason.message.slice(0, 200) : String(r.reason));
+
+            const status = candidates.length > 0 ? 'done' : 'error';
+            const errorMsg = candidates.length === 0
+              ? rejectionMsgs[0] ?? 'All candidates failed with unknown error.'
+              : undefined;
+            refStills[entity.id] = { status, candidates, selected: null, ...(errorMsg ? { error: errorMsg } : {}) };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
 
-            try {
-              const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
-
-              // 4 candidates per entity, also in parallel
-              const results = await Promise.allSettled(
-                Array.from({ length: 4 }, (_, j) =>
-                  generateOneImage(ai, model, prompt).then(async (img) => {
-                    if (!img) return null;
-                    const buffer = Buffer.from(img.data, 'base64');
-                    const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
-                    const blob = await put(
-                      `${id}/refs/${entity.id}/${j}.${ext}`,
-                      buffer,
-                      { access: 'public', contentType: img.mimeType },
-                    );
-                    return blob.url;
-                  }),
-                ),
-              );
-
-              const candidates = results
-                .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && r.value !== null)
-                .map((r) => r.value);
-
-              refStills[entity.id] = { status: 'done', candidates, selected: null };
-              await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
-
+            if (candidates.length > 0) {
               send({ type: 'entity_done', entityId: entity.id, candidates, durationMs: Date.now() - entityStart });
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              refStills[entity.id] = { status: 'error', candidates: [], selected: null, error: message };
-              await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
-              send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
+            } else {
+              send({ type: 'entity_error', entityId: entity.id, message: errorMsg!, durationMs: Date.now() - entityStart });
             }
-          }),
-        );
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            refStills[entity.id] = { status: 'error', candidates: [], selected: null, error: message };
+            await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
+            send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
+          }
+        }
 
         await getDb().storyboard.update({ where: { id }, data: { status: 'REFS_PENDING' } });
-        send({ type: 'done', total: entities.length });
+        send({ type: 'done', total: entitiesToGenerate.length });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         send({ type: 'error', message });
