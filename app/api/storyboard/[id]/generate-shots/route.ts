@@ -35,14 +35,14 @@ function buildShotPrompt(
   styleLock: ParsedStoryboard['style_lock'],
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${keyFramePrompt}\n\nStyle: ${WATERCOLOUR_STYLE}`;
+    return `Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${keyFramePrompt}\n\nStyle: ${styleParts.join(' ')}`;
+  return `Style: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
 }
 
 // ---------------------------------------------------------------------------

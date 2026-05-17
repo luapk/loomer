@@ -19,14 +19,14 @@ function buildPrompt(
 ): string {
   const base = entity.reference_still_prompt;
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${base}\n\nStyle: ${WATERCOLOUR_STYLE}`;
+    return `Style: ${WATERCOLOUR_STYLE}\n\n${base}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${base}\n\nStyle: ${styleParts.join(' ')}`;
+  return `Style: ${styleParts.join(' ')}\n\n${base}`;
 }
 
 // Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
