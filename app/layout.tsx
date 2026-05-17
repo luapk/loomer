@@ -8,27 +8,17 @@ export const metadata: Metadata = {
 
 function LoomerMark() {
   return (
-    <div className="inline-flex items-center gap-1.5">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <rect x="2" y="2" width="20" height="20" rx="0" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="6" y="6" width="12" height="12" rx="0" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="2" y1="8" x2="6" y2="8" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="2" y1="16" x2="6" y2="16" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="18" y1="8" x2="22" y2="8" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="18" y1="16" x2="22" y2="16" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-      <span
-        style={{
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: 11,
-          fontWeight: 600,
-          letterSpacing: '0.22em',
-          textTransform: 'uppercase',
-        }}
-      >
-        Loomer
-      </span>
-    </div>
+    <span
+      style={{
+        fontFamily: "'Italiana', Georgia, serif",
+        fontSize: 26,
+        fontWeight: 400,
+        letterSpacing: '0.04em',
+        lineHeight: 1,
+      }}
+    >
+      Loomer
+    </span>
   );
 }
 

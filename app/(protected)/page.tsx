@@ -601,7 +601,14 @@ function HomePageInner() {
         }
       } catch { /* ignore recovery errors, fall through to error state */ }
       setState({ phase: 'error', message: 'Lost connection during parse. Please try again.' });
+      return;
     }
+    // Stream closed without done/error event
+    setState((prev) =>
+      prev.phase === 'parsing'
+        ? { phase: 'error', message: 'Parse timed out. Please try again.' }
+        : prev,
+    );
   }
 
   async function generate() {
@@ -684,6 +691,12 @@ function HomePageInner() {
     } catch {
       setState({ phase: 'error', message: 'Lost connection to server mid-generation.' });
     }
+    // Stream closed without a done/error event (Vercel timeout or premature close)
+    setState((prev) =>
+      prev.phase === 'generating'
+        ? { phase: 'error', message: 'Generation timed out. Please try again — subsequent runs are faster once the prompt is cached.' }
+        : prev,
+    );
   }
 
   const isGenerating = state.phase === 'generating';
