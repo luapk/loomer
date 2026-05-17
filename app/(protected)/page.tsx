@@ -8,11 +8,12 @@ import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, ChevronDown, Check, ImageIcon,
-  Film, Download,
+  Film, Download, ScanEye,
 } from 'lucide-react';
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
+import type { ContinuityIssue, ContinuityCheckResult } from '@/app/api/storyboard/[id]/check-continuity/route';
 import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
 import type { DevStats } from '@/src/components/dev-stats';
 import { RegenShotButton } from './RegenShotButton';
@@ -96,6 +97,11 @@ function HomePageInner() {
   const [shotKeyFrames, setShotKeyFrames] = useState<ShotKeyFrames>({});
   const [shotsGenerating, setShotsGenerating] = useState(false);
   const refsInFlight = useRef(false);
+
+  // Continuity check
+  const [continuityIssues, setContinuityIssues] = useState<ContinuityIssue[]>([]);
+  const [continuityChecking, setContinuityChecking] = useState(false);
+  const [continuitySummary, setContinuitySummary] = useState<string | null>(null);
 
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
@@ -1011,6 +1017,50 @@ function HomePageInner() {
       {/* Boards tab */}
       {activeTab === 'boards' && isLoaded && 'parsedJson' in state && (
         <div className="space-y-4">
+          {/* Continuity check toolbar */}
+          {shotsTotal > 0 && (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={async () => {
+                  if (!('id' in state)) return;
+                  setContinuityChecking(true);
+                  setContinuityIssues([]);
+                  setContinuitySummary(null);
+                  try {
+                    const res = await fetch(`/api/storyboard/${state.id}/check-continuity`, { method: 'POST' });
+                    if (res.ok) {
+                      const data = await res.json() as ContinuityCheckResult;
+                      setContinuityIssues(data.issues);
+                      setContinuitySummary(data.summary);
+                    }
+                  } finally {
+                    setContinuityChecking(false);
+                  }
+                }}
+                disabled={continuityChecking}
+                className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors disabled:opacity-50 bg-white/40"
+              >
+                {continuityChecking
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <ScanEye className="h-3.5 w-3.5" />}
+                {continuityChecking ? 'Checking continuity…' : 'Check continuity'}
+              </button>
+              {continuitySummary && !continuityChecking && (
+                <span className={`text-xs ${continuityIssues.length === 0 ? 'text-green-700' : 'text-amber-700'}`}>
+                  {continuitySummary}
+                </span>
+              )}
+              {continuityIssues.length > 0 && (
+                <button
+                  onClick={() => { setContinuityIssues([]); setContinuitySummary(null); }}
+                  className="text-xs text-stone-400 hover:text-stone-600"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+
           {shotsTotal === 0 && !shotsGenerating && (
             <div className="flex flex-col items-center justify-center py-16 text-stone-400 space-y-3">
               <Film className="h-8 w-8" />
@@ -1055,15 +1105,28 @@ function HomePageInner() {
                       <RegenShotButton
                         storyboardId={state.id}
                         shotNumber={shot.shot_number as number}
-                        onSuccess={(url) =>
-                          setShotKeyFrames((prev) => ({
-                            ...prev,
-                            [n]: { status: 'done', url },
-                          }))
-                        }
+                        onSuccess={(url) => {
+                          setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'done', url } }));
+                          // Clear any continuity issues for this shot since it was regenerated
+                          setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== (shot.shot_number as number)));
+                        }}
                       />
                     </div>
                   )}
+                  {/* Continuity issue badge */}
+                  {continuityIssues.filter((i) => i.shot_number === (shot.shot_number as number)).map((issue, idx) => (
+                    <div
+                      key={idx}
+                      className={`absolute bottom-2 left-2 right-12 rounded-lg px-2.5 py-1.5 text-xs flex items-start gap-1.5 ${
+                        issue.severity === 'error'
+                          ? 'bg-red-900/80 text-red-100'
+                          : 'bg-amber-800/80 text-amber-100'
+                      }`}
+                    >
+                      <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+                      <span className="leading-snug">{issue.description}</span>
+                    </div>
+                  ))}
                 </div>
                 {/* Metadata */}
                 <div className="p-3 space-y-1">
