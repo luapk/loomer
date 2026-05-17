@@ -102,102 +102,175 @@ export async function parseStoryboard(
     console.log(`[parser] Calling ${model} with ${markdown.length} chars of markdown`);
   }
 
-  // Use the prompt-caching beta stream so we can fire onProgress as JSON is generated,
-  // and cache the parser system prompt server-side.
-  let response: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage;
-  try {
-    const messageStream = client.beta.promptCaching.messages.stream({
-      model,
-      max_tokens: maxTokens,
-      system: [{ type: 'text', text: PARSER_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-      tools: [
-        {
-          name: TOOL_NAME,
-          description: TOOL_DESCRIPTION,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          input_schema: inputSchema as any,
-        },
-      ],
-      tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [{ role: 'user', content: markdown }],
-    });
+  const tools: Anthropic.Beta.PromptCaching.PromptCachingBetaTool[] = [
+    {
+      name: TOOL_NAME,
+      description: TOOL_DESCRIPTION,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      input_schema: inputSchema as any,
+    },
+  ];
 
-    if (options.onProgress) {
-      let charsGenerated = 0;
-      messageStream.on('inputJson', (partialJson) => {
-        charsGenerated += partialJson.length;
-        options.onProgress!(charsGenerated);
+  // Attempt the parse, then retry once with error correction if Zod rejects it.
+  // Typical failure: the model collapses a nested object into a string (e.g.,
+  // style_lock → raw_block string). Feeding the error back usually fixes it.
+  let response!: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage;
+  let rawExtraction: unknown;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let lastErrors: string[] = [];
+
+  const MAX_ATTEMPTS = 2;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const messages: Anthropic.Beta.PromptCaching.PromptCachingBetaMessageParam[] =
+      attempt === 1
+        ? [{ role: 'user', content: markdown }]
+        : buildCorrectionMessages(markdown, response, rawExtraction, lastErrors);
+
+    try {
+      const messageStream = client.beta.promptCaching.messages.stream({
+        model,
+        max_tokens: maxTokens,
+        system: [{ type: 'text', text: PARSER_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+        tools,
+        tool_choice: { type: 'tool', name: TOOL_NAME },
+        messages,
       });
+
+      if (attempt === 1 && options.onProgress) {
+        let charsGenerated = 0;
+        messageStream.on('inputJson', (partialJson) => {
+          charsGenerated += partialJson.length;
+          options.onProgress!(charsGenerated);
+        });
+      }
+
+      response = await messageStream.finalMessage();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return failResult(`Anthropic API error: ${message}`, startTime);
     }
 
-    response = await messageStream.finalMessage();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return failResult(`Anthropic API error: ${message}`, startTime);
+    totalInputTokens += response.usage.input_tokens;
+    totalOutputTokens += response.usage.output_tokens;
+
+    const toolUseBlock = response.content.find(
+      (block) => block.type === 'tool_use' && block.name === TOOL_NAME,
+    );
+
+    if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
+      return failResult(
+        `No tool_use block in response (model returned: ${JSON.stringify(response.content).slice(0, 200)})`,
+        startTime,
+        response,
+      );
+    }
+
+    rawExtraction = toolUseBlock.input;
+
+    const parseResult = ParsedStoryboardSchema.safeParse(rawExtraction);
+
+    if (parseResult.success) {
+      const storyboard = parseResult.data;
+      const warnings = runIntegrityChecks(storyboard);
+
+      if (verbose) {
+        if (attempt > 1) console.log(`[parser] Succeeded on correction attempt ${attempt}`);
+        console.log(
+          `[parser] Parsed ${storyboard.total_shots} shots, ` +
+            `${storyboard.characters.length} characters, ` +
+            `${storyboard.locations.length} locations, ` +
+            `${storyboard.props.length} props in ${Date.now() - startTime}ms`,
+        );
+        if (warnings.length > 0) {
+          console.log(`[parser] ${warnings.length} integrity warnings:`);
+          warnings.forEach((w) => console.log(`  - ${w}`));
+        }
+      }
+
+      return {
+        success: true,
+        storyboard,
+        warnings,
+        errors: [],
+        raw_extraction: rawExtraction,
+        usage: {
+          input_tokens: totalInputTokens,
+          output_tokens: totalOutputTokens,
+          estimated_cost_usd: (totalInputTokens * 3 + totalOutputTokens * 15) / 1_000_000,
+          duration_ms: Date.now() - startTime,
+        },
+      };
+    }
+
+    lastErrors = parseResult.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`);
+
+    if (verbose) {
+      console.log(`[parser] Attempt ${attempt} failed validation:`, lastErrors);
+    }
   }
 
-  // Extract the tool_use block. Because we forced tool_choice, this should
-  // always be present; if it isn't, something's gone wrong upstream.
-  const toolUseBlock = response.content.find(
+  // All attempts exhausted.
+  return {
+    success: false,
+    storyboard: null,
+    warnings: [],
+    errors: ['Schema validation failed after retry:', ...lastErrors],
+    raw_extraction: rawExtraction,
+    usage: {
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      estimated_cost_usd: (totalInputTokens * 3 + totalOutputTokens * 15) / 1_000_000,
+      duration_ms: Date.now() - startTime,
+    },
+  };
+}
+
+// ============================================================================
+// Correction message builder
+// ============================================================================
+
+/**
+ * Builds the multi-turn messages for a correction retry.
+ * We replay the original user message, the model's (broken) tool call,
+ * a synthetic tool result, and a correction request — all in one turn.
+ */
+function buildCorrectionMessages(
+  markdown: string,
+  firstResponse: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage,
+  rawExtraction: unknown,
+  errors: string[],
+): Anthropic.Beta.PromptCaching.PromptCachingBetaMessageParam[] {
+  // Find the tool_use block from the first response.
+  const toolUseBlock = firstResponse.content.find(
     (block) => block.type === 'tool_use' && block.name === TOOL_NAME,
   );
+  const toolUseId = (toolUseBlock && toolUseBlock.type === 'tool_use') ? toolUseBlock.id : 'tool_0';
 
-  if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
-    return failResult(
-      `No tool_use block in response (model returned: ${JSON.stringify(response.content).slice(0, 200)})`,
-      startTime,
-      response,
-    );
-  }
-
-  const rawExtraction = toolUseBlock.input;
-
-  // Validate against Zod schema. This catches refinement-level errors that
-  // the JSON Schema layer can't enforce (e.g., "veo duration must be 4/6/8").
-  const parseResult = ParsedStoryboardSchema.safeParse(rawExtraction);
-
-  if (!parseResult.success) {
-    const errorMessages = parseResult.error.errors.map(
-      (e) => `${e.path.join('.')}: ${e.message}`,
-    );
-    return {
-      success: false,
-      storyboard: null,
-      warnings: [],
-      errors: ['Schema validation failed:', ...errorMessages],
-      raw_extraction: rawExtraction,
-      usage: makeUsage(response, startTime),
-    };
-  }
-
-  const storyboard = parseResult.data;
-
-  // Run integrity checks. These produce warnings rather than errors —
-  // a storyboard with issues should still parse, but we want to surface
-  // problems for the user to review.
-  const warnings = runIntegrityChecks(storyboard);
-
-  if (verbose) {
-    console.log(
-      `[parser] Parsed ${storyboard.total_shots} shots, ` +
-        `${storyboard.characters.length} characters, ` +
-        `${storyboard.locations.length} locations, ` +
-        `${storyboard.props.length} props in ${Date.now() - startTime}ms`,
-    );
-    if (warnings.length > 0) {
-      console.log(`[parser] ${warnings.length} integrity warnings:`);
-      warnings.forEach((w) => console.log(`  - ${w}`));
-    }
-  }
-
-  return {
-    success: true,
-    storyboard,
-    warnings,
-    errors: [],
-    raw_extraction: rawExtraction,
-    usage: makeUsage(response, startTime),
-  };
+  return [
+    { role: 'user', content: markdown },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: toolUseId,
+          name: TOOL_NAME,
+          input: rawExtraction as Record<string, unknown>,
+        },
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: `Schema validation failed. Please call the tool again with corrections.\n\nErrors:\n${errors.map((e) => `- ${e}`).join('\n')}\n\nCommon cause: a field that should be an object was returned as a string. For example, style_lock must be an object with fields like look, dp_reference, colour_grade, etc. — not a raw string.`,
+        },
+      ],
+    },
+  ];
 }
 
 // ============================================================================

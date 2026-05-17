@@ -8,18 +8,28 @@ export interface ImageModel {
   description: string;
 }
 
-// These use generateContent + responseModalities:['IMAGE'] — works with
-// any Gemini Developer API key, no Vertex AI required.
+// Models confirmed present in the API as of May 2026.
+// All use generateContent + responseModalities:['IMAGE'] — requires a paid Google AI key.
 const GEMINI_IMAGE_MODELS: ImageModel[] = [
   {
-    id: 'gemini-2.0-flash-preview-image-generation',
-    label: 'Gemini 2.0 Flash',
-    description: 'Fast image generation',
+    id: 'nano-banana-pro-preview',
+    label: 'Nano Banana Pro',
+    description: 'Best quality + multi-ref conditioning (recommended)',
   },
   {
-    id: 'gemini-2.0-flash-exp',
-    label: 'Gemini 2.0 Flash Exp',
-    description: 'Experimental variant',
+    id: 'gemini-3-pro-image-preview',
+    label: 'Gemini 3 Pro Image',
+    description: 'High quality, strong character consistency',
+  },
+  {
+    id: 'gemini-3.1-flash-image-preview',
+    label: 'Gemini 3.1 Flash Image',
+    description: 'Fast, good quality',
+  },
+  {
+    id: 'gemini-2.5-flash-image',
+    label: 'Gemini 2.5 Flash Image',
+    description: 'Fastest, lowest cost',
   },
 ];
 

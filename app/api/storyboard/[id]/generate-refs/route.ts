@@ -29,21 +29,34 @@ function buildPrompt(
   return `${base}\n\nStyle: ${styleParts.join(' ')}`;
 }
 
-// Generate one image via generateContent (works with Gemini Developer API keys).
-// Returns base64 bytes + mime type, or null if no image part in response.
+// Generate one image, retrying on 429 with exponential backoff (up to 3 attempts).
+// Returns base64 bytes + mime type, or null if the response contains no image part.
 async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
 ): Promise<{ data: string; mimeType: string } | null> {
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: { responseModalities: [Modality.IMAGE] },
-  });
-  for (const part of response.candidates?.[0]?.content?.parts ?? []) {
-    if (part.inlineData?.data) {
-      return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
+  const delays = [5000, 15000, 30000];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: { responseModalities: [Modality.IMAGE] },
+      });
+      for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+        if (part.inlineData?.data) {
+          return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
+        }
+      }
+      return null;
+    } catch (err) {
+      const is429 = err instanceof Error && err.message.includes('"code":429');
+      if (is429 && attempt < delays.length) {
+        await new Promise((r) => setTimeout(r, delays[attempt]!));
+        continue;
+      }
+      throw err;
     }
   }
   return null;
@@ -69,7 +82,7 @@ export async function POST(
   }
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
-  const model = storyboard.image_model ?? 'gemini-2.0-flash-preview-image-generation';
+  const model = storyboard.image_model ?? 'nano-banana-pro-preview';
   const renderStyle = storyboard.render_style;
 
   const entities: RefEntity[] = [
@@ -113,51 +126,52 @@ export async function POST(
       try {
         send({ type: 'start', total: entities.length });
 
-        for (let i = 0; i < entities.length; i++) {
-          const entity = entities[i];
-          if (!entity) continue;
+        // All entities generate in parallel — drops N×15s to ~15s flat.
+        // Each entity independently updates refStills and writes to DB as it completes.
+        await Promise.all(
+          entities.map(async (entity, i) => {
+            const entityStart = Date.now();
+            send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entities.length });
 
-          const entityStart = Date.now();
-          send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entities.length });
-
-          refStills[entity.id] = { status: 'generating', candidates: [], selected: null };
-          await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
-
-          try {
-            const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
-
-            // Generate 4 candidates in parallel — one generateContent call each
-            const results = await Promise.allSettled(
-              Array.from({ length: 4 }, (_, j) =>
-                generateOneImage(ai, model, prompt).then(async (img) => {
-                  if (!img) return null;
-                  const buffer = Buffer.from(img.data, 'base64');
-                  const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
-                  const blob = await put(
-                    `${id}/refs/${entity.id}/${j}.${ext}`,
-                    buffer,
-                    { access: 'public', contentType: img.mimeType },
-                  );
-                  return blob.url;
-                }),
-              ),
-            );
-
-            const candidates = results
-              .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && r.value !== null)
-              .map((r) => r.value);
-
-            refStills[entity.id] = { status: 'done', candidates, selected: null };
+            refStills[entity.id] = { status: 'generating', candidates: [], selected: null };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
 
-            send({ type: 'entity_done', entityId: entity.id, candidates, durationMs: Date.now() - entityStart });
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            refStills[entity.id] = { status: 'error', candidates: [], selected: null, error: message };
-            await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
-            send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
-          }
-        }
+            try {
+              const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
+
+              // 4 candidates per entity, also in parallel
+              const results = await Promise.allSettled(
+                Array.from({ length: 4 }, (_, j) =>
+                  generateOneImage(ai, model, prompt).then(async (img) => {
+                    if (!img) return null;
+                    const buffer = Buffer.from(img.data, 'base64');
+                    const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                    const blob = await put(
+                      `${id}/refs/${entity.id}/${j}.${ext}`,
+                      buffer,
+                      { access: 'public', contentType: img.mimeType },
+                    );
+                    return blob.url;
+                  }),
+                ),
+              );
+
+              const candidates = results
+                .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled' && r.value !== null)
+                .map((r) => r.value);
+
+              refStills[entity.id] = { status: 'done', candidates, selected: null };
+              await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
+
+              send({ type: 'entity_done', entityId: entity.id, candidates, durationMs: Date.now() - entityStart });
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              refStills[entity.id] = { status: 'error', candidates: [], selected: null, error: message };
+              await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
+              send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
+            }
+          }),
+        );
 
         await getDb().storyboard.update({ where: { id }, data: { status: 'REFS_PENDING' } });
         send({ type: 'done', total: entities.length });

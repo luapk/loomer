@@ -7,21 +7,23 @@ import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, ChevronDown, Check, ImageIcon,
+  Film, Download,
 } from 'lucide-react';
 import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
+import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
 import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
 import type { DevStats } from '@/src/components/dev-stats';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
-type Tab = 'storyboard' | 'shots' | 'images' | 'json';
+type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'json';
 
 type State =
   | { phase: 'empty' }
   | { phase: 'generating'; markdown: string }
   | { phase: 'parsing'; id: string; title: string; markdown: string; charsGenerated: number }
   | {
-      phase: 'parsed' | 'generating_refs' | 'refs_done';
+      phase: 'parsed' | 'generating_refs' | 'refs_done' | 'generating_shots' | 'shots_done';
       id: string;
       title: string;
       markdown: string;
@@ -88,6 +90,10 @@ export default function HomePage() {
   const [refStills, setRefStills] = useState<ReferenceStills>({});
   const [refsCurrentEntity, setRefsCurrentEntity] = useState<string | null>(null);
 
+  // Shot key frames
+  const [shotKeyFrames, setShotKeyFrames] = useState<ShotKeyFrames>({});
+  const [shotsGenerating, setShotsGenerating] = useState(false);
+
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
 
@@ -99,7 +105,9 @@ export default function HomePage() {
   const isLoaded =
     state.phase === 'parsed' ||
     state.phase === 'generating_refs' ||
-    state.phase === 'refs_done';
+    state.phase === 'refs_done' ||
+    state.phase === 'generating_shots' ||
+    state.phase === 'shots_done';
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -242,6 +250,73 @@ export default function HomePage() {
       setState((prev) =>
         prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
       );
+    }
+  }
+
+  async function startShotGeneration(id: string) {
+    setState((prev) =>
+      prev.phase === 'refs_done' || prev.phase === 'parsed'
+        ? { ...prev, phase: 'generating_shots' }
+        : prev,
+    );
+    setShotsGenerating(true);
+    setShotKeyFrames({});
+    setActiveTab('boards');
+
+    let res: Response;
+    try {
+      res = await fetch(`/api/storyboard/${id}/generate-shots`, { method: 'POST' });
+    } catch {
+      setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'refs_done' } : prev));
+      setShotsGenerating(false);
+      return;
+    }
+
+    if (!res.body || !res.ok) {
+      setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'refs_done' } : prev));
+      setShotsGenerating(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          if (!part.startsWith('data: ')) continue;
+          let payload: Record<string, unknown>;
+          try { payload = JSON.parse(part.slice(6)) as Record<string, unknown>; } catch { continue; }
+
+          if (payload['type'] === 'shot_start') {
+            const n = String(payload['shotNumber'] as number);
+            setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'generating', url: null } }));
+          } else if (payload['type'] === 'shot_done') {
+            const n = String(payload['shotNumber'] as number);
+            const url = payload['url'] as string;
+            setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'done', url } }));
+          } else if (payload['type'] === 'shot_error') {
+            const n = String(payload['shotNumber'] as number);
+            const message = payload['message'] as string;
+            setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'error', url: null, error: message } }));
+          } else if (payload['type'] === 'done') {
+            setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'shots_done' } : prev));
+            setShotsGenerating(false);
+          }
+        }
+      }
+    } catch {
+      // stream closed
+    } finally {
+      setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'shots_done' } : prev));
+      setShotsGenerating(false);
     }
   }
 
@@ -420,11 +495,16 @@ export default function HomePage() {
 
   const approvedCount = Object.values(refStills).filter((s) => s.selected !== null).length;
   const totalEntities = Object.keys(refStills).length;
+  const shotsTotal = Object.keys(shotKeyFrames).length;
+  const shotsDone = Object.values(shotKeyFrames).filter((s) => s.status === 'done').length;
+  const hasAnyApproved = approvedCount > 0;
 
   // Which tabs have content yet
   const hasStoryboard = state.phase !== 'empty' && state.phase !== 'error';
   const hasShots = isLoaded;
-  const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done';
+  const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done' ||
+    state.phase === 'generating_shots' || state.phase === 'shots_done';
+  const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done';
   const hasJson = isLoaded;
 
   const tabDefs = [
@@ -439,6 +519,12 @@ export default function HomePage() {
       label: totalEntities > 0 ? `Stills ${approvedCount}/${totalEntities}` : 'Stills',
       enabled: hasImages,
       spinner: state.phase === 'generating_refs',
+    },
+    {
+      id: 'boards' as Tab,
+      label: shotsTotal > 0 ? `Boards ${shotsDone}/${shotsTotal}` : 'Boards',
+      enabled: hasBoards,
+      spinner: shotsGenerating,
     },
     { id: 'json' as Tab, label: 'JSON', enabled: hasJson },
   ];
@@ -560,30 +646,67 @@ export default function HomePage() {
           </div>
 
           {/* Action row */}
-          <div className="flex items-center justify-between pt-1">
+          <div className="flex items-center justify-between pt-1 flex-wrap gap-3">
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setActiveTab('storyboard'); }}
+              onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
             >
               New storyboard
             </Button>
-            {state.phase === 'generating_refs' ? (
-              <div className="flex items-center gap-2 text-xs text-stone-500">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Generating…
-                {refsCurrentEntity && <span className="font-mono text-stone-400">{refsCurrentEntity}</span>}
-              </div>
-            ) : (
-              <Button
-                onClick={() => { void startGeneration(state.id); }}
-                disabled={modelsLoading}
-                variant={state.phase === 'refs_done' ? 'secondary' : 'default'}
-              >
-                {state.phase === 'refs_done' ? 'Regenerate stills' : 'Generate reference stills'}
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Ref generation */}
+              {state.phase === 'generating_refs' ? (
+                <div className="flex items-center gap-2 text-xs text-stone-500">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Generating stills…
+                  {refsCurrentEntity && <span className="font-mono text-stone-400">{refsCurrentEntity}</span>}
+                </div>
+              ) : (
+                <Button
+                  onClick={() => { void startGeneration(state.id); }}
+                  disabled={modelsLoading || shotsGenerating}
+                  variant="secondary"
+                  size="sm"
+                >
+                  {state.phase === 'refs_done' || state.phase === 'generating_shots' || state.phase === 'shots_done'
+                    ? 'Redo stills' : 'Generate stills'}
+                </Button>
+              )}
+
+              {/* Generate boards — only once some refs are approved */}
+              {(state.phase === 'refs_done' || state.phase === 'shots_done') && hasAnyApproved && (
+                shotsGenerating ? (
+                  <div className="flex items-center gap-2 text-xs text-stone-500">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Generating boards…
+                  </div>
+                ) : (
+                  <Button
+                    onClick={() => { void startShotGeneration(state.id); }}
+                    disabled={modelsLoading}
+                    variant={state.phase === 'shots_done' ? 'secondary' : 'default'}
+                    size={state.phase === 'shots_done' ? 'sm' : 'default'}
+                  >
+                    <Film className="h-4 w-4" />
+                    {state.phase === 'shots_done' ? 'Regenerate boards' : 'Generate boards'}
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                )
+              )}
+
+              {/* PDF download — once at least one board is done */}
+              {shotsDone > 0 && !shotsGenerating && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => { window.open(`/api/storyboard/${state.id}/pdf`, '_blank'); }}
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download PDF
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -742,6 +865,72 @@ export default function HomePage() {
             refStills={refStills}
             onApprove={(entityId, url) => void approveRef(state.id, entityId, url)}
           />
+        </div>
+      )}
+
+      {/* Boards tab */}
+      {activeTab === 'boards' && isLoaded && 'parsedJson' in state && (
+        <div className="space-y-4">
+          {shotsTotal === 0 && !shotsGenerating && (
+            <div className="flex flex-col items-center justify-center py-16 text-stone-400 space-y-3">
+              <Film className="h-8 w-8" />
+              <p className="text-sm">No boards generated yet.</p>
+            </div>
+          )}
+          {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+          {(state.parsedJson?.shots ?? []).map((shot: any) => {
+            const n = String(shot.shot_number as number);
+            const frame = shotKeyFrames[n];
+            return (
+              <div key={n} className="glass rounded-xl overflow-hidden">
+                {/* Image area */}
+                {frame?.status === 'done' && frame.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={frame.url}
+                    alt={`Shot ${n} — ${shot.descriptor as string}`}
+                    className="w-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full aspect-video bg-stone-100 flex items-center justify-center">
+                    {frame?.status === 'generating' ? (
+                      <div className="flex items-center gap-2 text-stone-400 text-xs">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Generating…
+                      </div>
+                    ) : frame?.status === 'error' ? (
+                      <div className="flex items-center gap-2 text-red-400 text-xs px-4 text-center">
+                        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                        {frame.error ?? 'Generation failed'}
+                      </div>
+                    ) : (
+                      <div className="text-stone-300 text-xs">Pending</div>
+                    )}
+                  </div>
+                )}
+                {/* Metadata */}
+                <div className="p-3 space-y-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-xs font-mono font-bold text-stone-400 w-6 flex-shrink-0">
+                      {String(shot.shot_number as number).padStart(2, '0')}
+                    </span>
+                    <span className="text-sm font-medium text-stone-900">{shot.descriptor as string}</span>
+                  </div>
+                  <p className="text-xs text-stone-500 pl-8 leading-snug">{shot.function as string}</p>
+                  <div className="flex items-center gap-2 pl-8 flex-wrap">
+                    <span className="text-xs font-mono text-stone-400">{shot.grammar?.scale as string}</span>
+                    <span className="text-stone-200">·</span>
+                    <span className="text-xs font-mono text-stone-400">{shot.grammar?.lens as string}</span>
+                    <span className="text-stone-200">·</span>
+                    <span className="text-xs text-stone-400">Veo {shot.duration?.veo as number}s</span>
+                  </div>
+                  {shot.dialogue_vo && (
+                    <p className="text-xs text-stone-600 italic pl-8 leading-snug">"{shot.dialogue_vo as string}"</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 
