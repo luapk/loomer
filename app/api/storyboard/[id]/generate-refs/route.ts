@@ -186,7 +186,7 @@ export async function POST(
 
             const status = candidates.length > 0 ? 'done' : 'error';
             const errorMsg = candidates.length === 0
-              ? 'All candidates returned no image — the model may have blocked the prompt or hit a quota limit. You can upload your own reference using the Upload button.'
+              ? 'All candidates returned no image — the model may have blocked the prompt or hit a quota limit.'
               : undefined;
             refStills[entity.id] = { status, candidates, selected: null, ...(errorMsg ? { error: errorMsg } : {}) };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });

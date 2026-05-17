@@ -1155,9 +1155,19 @@ function EntityCard({
       )}
 
       {hasError && (
-        <div className="text-xs text-red-600 flex items-start gap-2 py-1">
-          <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
-          <span>{still.error ?? 'Generation failed'} — upload your own reference above.</span>
+        <div className="rounded-lg bg-red-50 border border-red-100 p-3 space-y-2">
+          <div className="text-xs text-red-700 flex items-start gap-2">
+            <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
+            <span>{still.error ?? 'Generation failed'}</span>
+          </div>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+            className="flex items-center gap-1.5 text-xs font-medium text-stone-700 bg-white border border-stone-200 rounded-md px-2.5 py-1.5 hover:bg-stone-50 transition-colors disabled:opacity-50"
+          >
+            {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
+            {uploading ? 'Uploading…' : 'Upload your own reference'}
+          </button>
         </div>
       )}
 
