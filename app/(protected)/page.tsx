@@ -111,8 +111,7 @@ function HomePageInner() {
   const [continuityIssues, setContinuityIssues] = useState<ContinuityIssue[]>([]);
   const [continuityChecking, setContinuityChecking] = useState(false);
   const [continuitySummary, setContinuitySummary] = useState<string | null>(null);
-  const [continuityRectifying, setContinuityRectifying] = useState<Set<number>>(new Set());
-  const continuityAutoFixDone = useRef(false);
+  const continuityAutoCheckDone = useRef(false);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [notifyWhenDone, setNotifyWhenDone] = useState(false);
 
@@ -398,7 +397,7 @@ function HomePageInner() {
     setShotKeyFrames({});
     setContinuityIssues([]);
     setContinuitySummary(null);
-    continuityAutoFixDone.current = false;
+    continuityAutoCheckDone.current = false;
     setActiveTab('boards');
 
     let res: Response;
@@ -457,14 +456,14 @@ function HomePageInner() {
       setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'shots_done' } : prev));
       setShotsGenerating(false);
     }
-    // Auto continuity pass — one attempt only, runs right after first board generation
-    if (!continuityAutoFixDone.current) {
-      continuityAutoFixDone.current = true;
-      await runContinuityCheck(id, true);
+    // Auto continuity check — flags remaining issues after generation; no regen.
+    if (!continuityAutoCheckDone.current) {
+      continuityAutoCheckDone.current = true;
+      await runContinuityCheck(id);
     }
   }
 
-  async function runContinuityCheck(id: string, autoFix: boolean) {
+  async function runContinuityCheck(id: string) {
     setContinuityChecking(true);
     setContinuityIssues([]);
     setContinuitySummary(null);
@@ -474,33 +473,6 @@ function HomePageInner() {
       const data = await res.json() as ContinuityCheckResult;
       setContinuityIssues(data.issues);
       setContinuitySummary(data.summary);
-
-      if (autoFix && data.issues.length > 0) {
-        const shotNumbers = [...new Set(data.issues.map((i) => i.shot_number))];
-        setContinuityRectifying(new Set(shotNumbers));
-        await Promise.all(
-          shotNumbers.map(async (shotNumber) => {
-            try {
-              const r = await fetch(`/api/storyboard/${id}/regen-shot`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ shotNumber, variations: [] }),
-              });
-              if (r.ok) {
-                const d = await r.json() as { url: string };
-                setShotKeyFrames((prev) => ({ ...prev, [String(shotNumber)]: { status: 'done', url: d.url } }));
-                setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== shotNumber));
-              }
-            } catch { /* ignore per-shot errors */ }
-            setContinuityRectifying((prev) => {
-              const next = new Set(prev);
-              next.delete(shotNumber);
-              return next;
-            });
-          }),
-        );
-        setContinuitySummary('Continuity corrected.');
-      }
     } finally {
       setContinuityChecking(false);
     }
@@ -939,7 +911,7 @@ function HomePageInner() {
               {hasBoards && (
                 <button
                   type="button"
-                  onClick={() => { if ('id' in state) void runContinuityCheck(state.id, true); }}
+                  onClick={() => { if ('id' in state) void runContinuityCheck(state.id); }}
                   disabled={continuityChecking}
                   title={continuityChecking ? 'Checking continuity…' : 'Check continuity'}
                   className="h-8 w-8 flex items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-400 hover:border-stone-400 hover:text-stone-700 transition-colors disabled:opacity-50"
@@ -1261,17 +1233,8 @@ function HomePageInner() {
                       )}
                     </div>
                   )}
-                  {/* Rectifying continuity overlay */}
-                  {continuityRectifying.has(shot.shot_number as number) && (
-                    <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2">
-                      <Loader2 className="h-5 w-5 animate-spin text-white" />
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'white' }}>
-                        Rectifying continuity
-                      </span>
-                    </div>
-                  )}
                   {/* Regen button — only show once there is a frame (done or error) */}
-                  {'id' in state && !continuityRectifying.has(shot.shot_number as number) && (frame?.status === 'done' || frame?.status === 'error') && (
+                  {'id' in state && (frame?.status === 'done' || frame?.status === 'error') && (
                     <div className="absolute top-2 right-2">
                       <RegenShotButton
                         storyboardId={state.id}
