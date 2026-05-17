@@ -102,6 +102,9 @@ function HomePageInner() {
   const [continuityIssues, setContinuityIssues] = useState<ContinuityIssue[]>([]);
   const [continuityChecking, setContinuityChecking] = useState(false);
   const [continuitySummary, setContinuitySummary] = useState<string | null>(null);
+  const [continuityRectifying, setContinuityRectifying] = useState<Set<number>>(new Set());
+  const continuityAutoFixDone = useRef(false);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
 
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
@@ -135,6 +138,15 @@ function HomePageInner() {
 
   const searchParams = useSearchParams();
   const router = useRouter();
+
+  // Open "How it works" modal when ?how=1 is in the URL
+  useEffect(() => {
+    if (searchParams.get('how') === '1') {
+      setShowHowItWorks(true);
+      router.replace('/');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Hydrate from an existing storyboard record when ?sb={id} is in the URL.
   useEffect(() => {
@@ -373,6 +385,9 @@ function HomePageInner() {
     );
     setShotsGenerating(true);
     setShotKeyFrames({});
+    setContinuityIssues([]);
+    setContinuitySummary(null);
+    continuityAutoFixDone.current = false;
     setActiveTab('boards');
 
     let res: Response;
@@ -429,6 +444,53 @@ function HomePageInner() {
     } finally {
       setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'shots_done' } : prev));
       setShotsGenerating(false);
+    }
+    // Auto continuity pass — one attempt only, runs right after first board generation
+    if (!continuityAutoFixDone.current) {
+      continuityAutoFixDone.current = true;
+      await runContinuityCheck(id, true);
+    }
+  }
+
+  async function runContinuityCheck(id: string, autoFix: boolean) {
+    setContinuityChecking(true);
+    setContinuityIssues([]);
+    setContinuitySummary(null);
+    try {
+      const res = await fetch(`/api/storyboard/${id}/check-continuity`, { method: 'POST' });
+      if (!res.ok) return;
+      const data = await res.json() as ContinuityCheckResult;
+      setContinuityIssues(data.issues);
+      setContinuitySummary(data.summary);
+
+      if (autoFix && data.issues.length > 0) {
+        const shotNumbers = [...new Set(data.issues.map((i) => i.shot_number))];
+        setContinuityRectifying(new Set(shotNumbers));
+        await Promise.all(
+          shotNumbers.map(async (shotNumber) => {
+            try {
+              const r = await fetch(`/api/storyboard/${id}/regen-shot`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shotNumber, variations: [] }),
+              });
+              if (r.ok) {
+                const d = await r.json() as { url: string };
+                setShotKeyFrames((prev) => ({ ...prev, [String(shotNumber)]: { status: 'done', url: d.url } }));
+                setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== shotNumber));
+              }
+            } catch { /* ignore per-shot errors */ }
+            setContinuityRectifying((prev) => {
+              const next = new Set(prev);
+              next.delete(shotNumber);
+              return next;
+            });
+          }),
+        );
+        setContinuitySummary('Continuity corrected.');
+      }
+    } finally {
+      setContinuityChecking(false);
     }
   }
 
@@ -681,9 +743,20 @@ function HomePageInner() {
               : <span>New <em>storyboard</em></span>}
           </h1>
           {state.phase === 'empty' && (
-            <p className="mt-2" style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 15, lineHeight: 1.5, color: 'var(--ink-mid)', maxWidth: 480 }}>
-              Paste a script, premise, or beat list. The storyboard skill handles the rest.
-            </p>
+            <div className="mt-3 space-y-3" style={{ maxWidth: 480 }}>
+              <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 16, lineHeight: 1.55, color: 'var(--ink-mid)', fontStyle: 'italic' }}>
+                Storyboards that finally feel like film.
+              </p>
+              <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, lineHeight: 1.5, color: 'var(--ink-dim)' }}>
+                Paste a script, premise, or beat list — Loomer breaks it into shots, sources reference stills, and renders cinematic key frames ready for client delivery.
+              </p>
+              <button
+                onClick={() => setShowHowItWorks(true)}
+                style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--ink-low)', textDecoration: 'underline', textUnderlineOffset: 3, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
+                How it works
+              </button>
+            </div>
           )}
           {'id' in state && (
             <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--ink-dim)', marginTop: 6 }}>ID: {state.id}</p>
@@ -1064,21 +1137,9 @@ function HomePageInner() {
           {shotsTotal > 0 && (
             <div className="flex items-center gap-3">
               <button
-                onClick={async () => {
+                onClick={() => {
                   if (!('id' in state)) return;
-                  setContinuityChecking(true);
-                  setContinuityIssues([]);
-                  setContinuitySummary(null);
-                  try {
-                    const res = await fetch(`/api/storyboard/${state.id}/check-continuity`, { method: 'POST' });
-                    if (res.ok) {
-                      const data = await res.json() as ContinuityCheckResult;
-                      setContinuityIssues(data.issues);
-                      setContinuitySummary(data.summary);
-                    }
-                  } finally {
-                    setContinuityChecking(false);
-                  }
+                  void runContinuityCheck(state.id, true);
                 }}
                 disabled={continuityChecking}
                 className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors disabled:opacity-50 bg-white/40"
@@ -1152,8 +1213,17 @@ function HomePageInner() {
                       )}
                     </div>
                   )}
+                  {/* Rectifying continuity overlay */}
+                  {continuityRectifying.has(shot.shot_number as number) && (
+                    <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="h-5 w-5 animate-spin text-white" />
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'white' }}>
+                        Rectifying continuity
+                      </span>
+                    </div>
+                  )}
                   {/* Regen button — only show once there is a frame (done or error) */}
-                  {'id' in state && (frame?.status === 'done' || frame?.status === 'error') && (
+                  {'id' in state && !continuityRectifying.has(shot.shot_number as number) && (frame?.status === 'done' || frame?.status === 'error') && (
                     <div className="absolute top-2 right-2">
                       <RegenShotButton
                         storyboardId={state.id}
@@ -1208,6 +1278,54 @@ function HomePageInner() {
       )}
 
       <DevStatsPanel stats={devStats} />
+
+      {/* How It Works modal */}
+      {showHowItWorks && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-6"
+          style={{ background: 'rgba(0,0,0,0.55)' }}
+          onClick={() => setShowHowItWorks(false)}
+        >
+          <div
+            className="bg-[var(--paper)] max-w-lg w-full"
+            style={{ border: '1px solid var(--ink)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-8 py-5" style={{ borderBottom: '1px solid var(--ink)' }}>
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.22em', textTransform: 'uppercase', color: 'var(--ink)' }}>
+                How it works
+              </span>
+              <button onClick={() => setShowHowItWorks(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-dim)', fontSize: 18, lineHeight: 1 }}>✕</button>
+            </div>
+            {/* Steps */}
+            <div className="px-8 py-6 space-y-6">
+              {([
+                { icon: '01', title: 'Paste your script', body: 'Drop in a screenplay, treatment, or rough beat list. Loomer reads it as a director would.' },
+                { icon: '02', title: 'Review the shot list', body: 'The storyboard skill breaks your story into a precise shot list — scale, lens, movement, and continuity all accounted for.' },
+                { icon: '03', title: 'Approve reference stills', body: 'Gemini generates candidate stills for each character, location, and prop. Pick the ones that match your vision, or fine-tune with director\'s notes.' },
+                { icon: '04', title: 'Generate key frames', body: 'With references locked in, Loomer renders a cinematic key frame for every shot — ready to download as a ZIP or export as a polished PDF contact sheet.' },
+              ] as const).map((step) => (
+                <div key={step.icon} className="flex gap-5 items-start">
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--ink-ghost)', flexShrink: 0, paddingTop: 2 }}>{step.icon}</span>
+                  <div>
+                    <p style={{ fontFamily: "'Instrument Serif', Georgia, serif", fontSize: 16, color: 'var(--ink)', marginBottom: 4 }}>{step.title}</p>
+                    <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 13, lineHeight: 1.55, color: 'var(--ink-dim)' }}>{step.body}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="px-8 pb-6">
+              <button
+                onClick={() => setShowHowItWorks(false)}
+                style={{ background: '#111', color: '#fff', fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', border: 'none', padding: '10px 20px', cursor: 'pointer', width: '100%' }}
+              >
+                Got it — let&apos;s make a storyboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

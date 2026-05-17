@@ -57,6 +57,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <a href="/list" className="text-[var(--ink-low)] hover:text-[var(--ink)] transition-colors">
                   Archive
                 </a>
+                <a href="/?how=1" className="text-[var(--ink-low)] hover:text-[var(--ink)] transition-colors">
+                  How it works
+                </a>
               </nav>
             </div>
           </header>

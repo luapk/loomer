@@ -6,18 +6,18 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/src/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
         default:
-          'bg-stone-900 text-white hover:bg-stone-800 focus-visible:ring-stone-900',
+          'bg-[#111] text-white hover:bg-[#333] focus-visible:ring-[#111] rounded-none [font-family:\'JetBrains_Mono\',monospace] tracking-[0.18em] uppercase text-[10px]',
         secondary:
-          'bg-white/60 border border-stone-200 text-stone-700 hover:bg-white/90 backdrop-blur-sm focus-visible:ring-stone-400',
+          'bg-white/60 border border-stone-200 text-stone-700 hover:bg-white/90 backdrop-blur-sm focus-visible:ring-stone-400 rounded-xl',
         ghost:
-          'text-stone-600 hover:bg-stone-100/60 hover:text-stone-900 focus-visible:ring-stone-400',
+          'text-stone-600 hover:bg-stone-100/60 hover:text-stone-900 focus-visible:ring-stone-400 rounded-xl',
         destructive:
-          'bg-red-100 text-red-700 border border-red-200 hover:bg-red-200 focus-visible:ring-red-400',
+          'bg-red-100 text-red-700 border border-red-200 hover:bg-red-200 focus-visible:ring-red-400 rounded-xl',
       },
       size: {
         default: 'h-10 px-5 py-2',
