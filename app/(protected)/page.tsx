@@ -8,7 +8,7 @@ import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, Check, ImageIcon,
-  Film, Download, ScanEye, Pencil, Bell, BellOff,
+  Film, Download, ScanEye, Pencil, Bell, BellOff, Plus,
 } from 'lucide-react';
 
 function toTitleCase(str: string): string {
@@ -111,6 +111,7 @@ function HomePageInner() {
   const [continuityIssues, setContinuityIssues] = useState<ContinuityIssue[]>([]);
   const [continuityChecking, setContinuityChecking] = useState(false);
   const [continuitySummary, setContinuitySummary] = useState<string | null>(null);
+  const [continuityFixing, setContinuityFixing] = useState<Set<number>>(new Set());
   const continuityAutoCheckDone = useRef(false);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [notifyWhenDone, setNotifyWhenDone] = useState(false);
@@ -1251,14 +1252,43 @@ function HomePageInner() {
                   {continuityIssues.filter((i) => i.shot_number === (shot.shot_number as number)).map((issue, idx) => (
                     <div
                       key={idx}
-                      className={`absolute bottom-2 left-2 right-12 rounded-lg px-2.5 py-1.5 text-xs flex items-start gap-1.5 ${
+                      className={`absolute bottom-2 left-2 right-12 rounded-lg px-2 py-1 text-xs flex items-center gap-1.5 ${
                         issue.severity === 'error'
                           ? 'bg-red-900/80 text-red-100'
                           : 'bg-amber-800/80 text-amber-100'
                       }`}
                     >
-                      <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
-                      <span className="leading-snug">{issue.description}</span>
+                      <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                      <span className="flex-1 leading-tight truncate">{issue.description}</span>
+                      {'id' in state && (
+                        <button
+                          type="button"
+                          title="Fix: regenerate using this note"
+                          disabled={continuityFixing.has(shot.shot_number as number)}
+                          onClick={async () => {
+                            const sn = shot.shot_number as number;
+                            setContinuityFixing((prev) => new Set(prev).add(sn));
+                            try {
+                              const r = await fetch(`/api/storyboard/${state.id}/regen-shot`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ shotNumber: sn, variations: [issue.description] }),
+                              });
+                              if (r.ok) {
+                                const d = await r.json() as { url: string };
+                                setShotKeyFrames((prev) => ({ ...prev, [String(sn)]: { status: 'done', url: d.url } }));
+                                setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== sn));
+                              }
+                            } catch { /* ignore */ }
+                            setContinuityFixing((prev) => { const s = new Set(prev); s.delete(sn); return s; });
+                          }}
+                          className="flex-shrink-0 h-5 w-5 flex items-center justify-center rounded bg-white/20 hover:bg-white/40 transition-colors disabled:opacity-50"
+                        >
+                          {continuityFixing.has(shot.shot_number as number)
+                            ? <Loader2 className="h-3 w-3 animate-spin" />
+                            : <Plus className="h-3 w-3" />}
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>

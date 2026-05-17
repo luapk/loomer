@@ -70,6 +70,7 @@ Do NOT flag:
 - Style inconsistencies (those are a separate concern)
 
 Be precise: name which characters are affected and which shot numbers are in conflict.
+Description must be ≤8 words — terse, specific, no filler. E.g. "Leo swaps to screen-right vs shot 3."
 
 Respond with JSON only — no prose outside the JSON block:
 {
