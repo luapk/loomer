@@ -98,7 +98,7 @@ export async function POST(
   }
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
-  const model = storyboard.image_model ?? 'nano-banana-pro-preview';
+  const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
   const renderStyle = storyboard.render_style;
 
   // Find entity by id across characters, locations, and props

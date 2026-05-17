@@ -85,7 +85,7 @@ function HomePageInner() {
   const [state, setState] = useState<State>({ phase: 'empty' });
 
   const [renderStyle, setRenderStyle] = useState<RenderStyle>('PHOTOREAL');
-  const [imageModel, setImageModel] = useState<string>('nano-banana-pro-preview');
+  const [imageModel, setImageModel] = useState<string>('gemini-2.5-flash-image');
   const [availableModels, setAvailableModels] = useState<ImageModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -171,7 +171,7 @@ function HomePageInner() {
         if (data.render_style) setRenderStyle(data.render_style);
         // Only restore the saved model if it's a known-good ID — stale records may
         // have the old non-existent 'gemini-2.0-flash-preview-image-generation' name.
-        const KNOWN_IMAGE_MODELS = ['nano-banana-pro-preview', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview', 'gemini-2.5-flash-image'];
+        const KNOWN_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview'];
         if (data.image_model && KNOWN_IMAGE_MODELS.includes(data.image_model)) {
           setImageModel(data.image_model);
         }
