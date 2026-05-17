@@ -10,10 +10,10 @@ function LoomerMark() {
   return (
     <span
       style={{
-        fontFamily: "'Italiana', Georgia, serif",
-        fontSize: 26,
+        fontFamily: "'Great Vibes', cursive",
+        fontSize: 22,
         fontWeight: 400,
-        letterSpacing: '0.04em',
+        letterSpacing: '0.01em',
         lineHeight: 1,
       }}
     >

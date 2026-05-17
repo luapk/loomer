@@ -972,7 +972,7 @@ function HomePageInner() {
               />
               <div className="flex items-center justify-between">
                 <span className="text-xs text-stone-400">
-                  {script.length > 0 ? `${script.length} chars` : "Tip: include the word \"storyboard\" if the skill doesn't trigger"}
+                  {script.length > 0 ? `${script.length} chars` : ''}
                 </span>
                 <Button onClick={() => { void generate(); }} disabled={!script.trim()}>
                   Generate storyboard
@@ -1290,7 +1290,6 @@ function HomePageInner() {
         </div>
       )}
 
-      <DevStatsPanel stats={devStats} />
 
       {/* How It Works modal */}
       {showHowItWorks && (
