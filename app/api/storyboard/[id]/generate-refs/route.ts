@@ -29,21 +29,34 @@ function buildPrompt(
   return `${base}\n\nStyle: ${styleParts.join(' ')}`;
 }
 
-// Generate one image via generateContent (works with Gemini Developer API keys).
-// Returns base64 bytes + mime type, or null if no image part in response.
+// Generate one image, retrying on 429 with exponential backoff (up to 3 attempts).
+// Returns base64 bytes + mime type, or null if the response contains no image part.
 async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
 ): Promise<{ data: string; mimeType: string } | null> {
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: { responseModalities: [Modality.IMAGE] },
-  });
-  for (const part of response.candidates?.[0]?.content?.parts ?? []) {
-    if (part.inlineData?.data) {
-      return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
+  const delays = [5000, 15000, 30000];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: { responseModalities: [Modality.IMAGE] },
+      });
+      for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+        if (part.inlineData?.data) {
+          return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
+        }
+      }
+      return null;
+    } catch (err) {
+      const is429 = err instanceof Error && err.message.includes('"code":429');
+      if (is429 && attempt < delays.length) {
+        await new Promise((r) => setTimeout(r, delays[attempt]!));
+        continue;
+      }
+      throw err;
     }
   }
   return null;
