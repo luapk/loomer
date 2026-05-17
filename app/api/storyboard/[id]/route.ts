@@ -16,3 +16,18 @@ export async function GET(
 
   return NextResponse.json(storyboard);
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+
+  const storyboard = await getDb().storyboard.findUnique({ where: { id }, select: { id: true } });
+  if (!storyboard) {
+    return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
+  }
+
+  await getDb().storyboard.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
+}

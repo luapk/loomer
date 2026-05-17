@@ -4,7 +4,8 @@ export const dynamic = 'force-dynamic';
 import { Badge } from '@/src/components/ui/badge';
 import { Button } from '@/src/components/ui/button';
 import Link from 'next/link';
-import { FilmIcon, Plus } from 'lucide-react';
+import { FilmIcon, Plus, ExternalLink } from 'lucide-react';
+import { StoryboardRowActions } from './StoryboardRowActions';
 
 const STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'outline' | 'success' | 'warning' | 'error' }> = {
   DRAFT: { label: 'Draft', variant: 'outline' },
@@ -55,14 +56,13 @@ export default async function ListPage() {
         <div className="space-y-3">
           {storyboards.map((sb) => {
             const statusInfo = STATUS_LABELS[sb.status] ?? { label: sb.status, variant: 'default' as const };
-            // parsed_json is an opaque blob from Prisma — we just want the shot count for display
             const parsed = sb.parsed_json as Record<string, unknown> | null;
             const shots = parsed && Array.isArray(parsed['shots']) ? parsed['shots'] : null;
             const shotCount = shots !== null ? shots.length : null;
 
             return (
               <div key={sb.id} className="glass rounded-2xl p-5 flex items-center justify-between gap-4 hover:bg-white/70 transition-colors">
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <h3 className="font-medium text-stone-900 truncate">{sb.title}</h3>
                   <p className="text-xs text-stone-400 font-mono mt-0.5">
                     {sb.created_at.toLocaleDateString('en-GB', {
@@ -73,8 +73,15 @@ export default async function ListPage() {
                     {shotCount !== null && ` · ${shotCount} shots`}
                   </p>
                 </div>
-                <div className="flex items-center gap-3 flex-shrink-0">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>
+                  <Button asChild size="sm" variant="secondary" className="h-7 px-2 text-xs gap-1">
+                    <Link href={`/?sb=${sb.id}`}>
+                      <ExternalLink className="h-3 w-3" />
+                      Open
+                    </Link>
+                  </Button>
+                  <StoryboardRowActions id={sb.id} />
                 </div>
               </div>
             );

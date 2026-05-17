@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Button } from '@/src/components/ui/button';
 import { Textarea } from '@/src/components/ui/textarea';
 import { Badge } from '@/src/components/ui/badge';
@@ -77,7 +78,7 @@ function useProgressMessage(active: boolean, milestones: { ms: number; text: str
   return milestones[index]?.text ?? milestones[milestones.length - 1]?.text ?? '';
 }
 
-export default function HomePage() {
+function HomePageInner() {
   const [script, setScript] = useState('');
   const [state, setState] = useState<State>({ phase: 'empty' });
 
@@ -123,6 +124,65 @@ export default function HomePage() {
       .finally(() => setModelsLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded]);
+
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // Hydrate from an existing storyboard record when ?sb={id} is in the URL.
+  useEffect(() => {
+    const sbId = searchParams.get('sb');
+    if (!sbId) return;
+    // Clear the param so Back/refresh doesn't re-trigger
+    router.replace('/');
+
+    fetch(`/api/storyboard/${sbId}`)
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then((data: {
+        id: string;
+        title: string;
+        source_markdown: string;
+        parsed_json: unknown;
+        status: string;
+        render_style: RenderStyle;
+        image_model: string | null;
+        reference_stills: unknown;
+        shot_key_frames: unknown;
+      }) => {
+        if (data.render_style) setRenderStyle(data.render_style);
+        if (data.image_model) setImageModel(data.image_model);
+
+        const refStillsData = data.reference_stills as ReferenceStills | null;
+        if (refStillsData) setRefStills(refStillsData);
+
+        const shotFramesData = data.shot_key_frames as ShotKeyFrames | null;
+        if (shotFramesData) setShotKeyFrames(shotFramesData);
+
+        if (data.source_markdown) setScript(data.source_markdown);
+
+        const hasParsed = !!data.parsed_json;
+        const hasShots = shotFramesData && Object.keys(shotFramesData).length > 0;
+        const hasApprovedRef = refStillsData &&
+          Object.values(refStillsData).some((s) => s.selected !== null);
+
+        if (hasShots) {
+          setState({ phase: 'shots_done', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
+          setActiveTab('boards');
+        } else if (hasApprovedRef || data.status === 'REFS_PENDING' || data.status === 'REFS_APPROVED') {
+          setState({ phase: 'refs_done', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
+          setActiveTab('images');
+        } else if (hasParsed) {
+          setState({ phase: 'parsed', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
+          setActiveTab('storyboard');
+        } else {
+          // DRAFT or failed — just pre-fill the script so user can retry
+          setState({ phase: 'empty' });
+        }
+      })
+      .catch(() => {
+        setState({ phase: 'error', message: 'Could not load storyboard.' });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function approveRef(storyboardId: string, entityId: string, url: string) {
     setRefStills((prev) => ({
@@ -1061,5 +1121,13 @@ function EntitySection({ title, entities, refStills, onApprove }: EntitySectionP
         })}
       </div>
     </div>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense>
+      <HomePageInner />
+    </Suspense>
   );
 }
