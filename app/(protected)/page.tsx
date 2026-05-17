@@ -15,6 +15,7 @@ import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
 import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
 import type { DevStats } from '@/src/components/dev-stats';
+import { RegenShotButton } from './RegenShotButton';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
 type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'json';
@@ -1022,31 +1023,48 @@ function HomePageInner() {
             const frame = shotKeyFrames[n];
             return (
               <div key={n} className="glass rounded-xl overflow-hidden">
-                {/* Image area */}
-                {frame?.status === 'done' && frame.url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={frame.url}
-                    alt={`Shot ${n} — ${shot.descriptor as string}`}
-                    className="w-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full aspect-video bg-stone-100 flex items-center justify-center">
-                    {frame?.status === 'generating' ? (
-                      <div className="flex items-center gap-2 text-stone-400 text-xs">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Generating…
-                      </div>
-                    ) : frame?.status === 'error' ? (
-                      <div className="flex items-center gap-2 text-red-400 text-xs px-4 text-center">
-                        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                        {frame.error ?? 'Generation failed'}
-                      </div>
-                    ) : (
-                      <div className="text-stone-300 text-xs">Pending</div>
-                    )}
-                  </div>
-                )}
+                {/* Image area — relative so the regen button can be absolutely positioned */}
+                <div className="relative">
+                  {frame?.status === 'done' && frame.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={frame.url}
+                      alt={`Shot ${n} — ${shot.descriptor as string}`}
+                      className="w-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full aspect-video bg-stone-100 flex items-center justify-center">
+                      {frame?.status === 'generating' ? (
+                        <div className="flex items-center gap-2 text-stone-400 text-xs">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Generating…
+                        </div>
+                      ) : frame?.status === 'error' ? (
+                        <div className="flex items-center gap-2 text-red-400 text-xs px-4 text-center">
+                          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                          {frame.error ?? 'Generation failed'}
+                        </div>
+                      ) : (
+                        <div className="text-stone-300 text-xs">Pending</div>
+                      )}
+                    </div>
+                  )}
+                  {/* Regen button — only show once there is a frame (done or error) */}
+                  {'id' in state && (frame?.status === 'done' || frame?.status === 'error') && (
+                    <div className="absolute top-2 right-2">
+                      <RegenShotButton
+                        storyboardId={state.id}
+                        shotNumber={shot.shot_number as number}
+                        onSuccess={(url) =>
+                          setShotKeyFrames((prev) => ({
+                            ...prev,
+                            [n]: { status: 'done', url },
+                          }))
+                        }
+                      />
+                    </div>
+                  )}
+                </div>
                 {/* Metadata */}
                 <div className="p-3 space-y-1">
                   <div className="flex items-baseline gap-2">
