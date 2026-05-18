@@ -71,12 +71,18 @@ async function generateOneShot(
   );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
-  const parts: any[] = [
+  const parts: any[] = [];
+
+  // Appearance-reference override: refs define look only, not composition or style.
+  if (conditioningImages.length > 0) {
+    parts.push({ text: '[APPEARANCE REFERENCE: The following image(s) define character/location appearance ONLY. Do NOT adopt their visual style, medium, or camera angle. Apply strictly the style and composition described in the text prompt.]' });
+  }
+  parts.push(
     ...conditioningImages.map((img) => ({
       inlineData: { data: img.data, mimeType: img.mimeType },
     })),
-    { text: prompt },
-  ];
+  );
+  parts.push({ text: prompt });
 
   const delays = [5000, 15000, 30000];
   for (let attempt = 0; attempt <= delays.length; attempt++) {

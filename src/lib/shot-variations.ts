@@ -62,4 +62,16 @@ export const SHOT_VARIATION_GROUPS: VariationGroup[] = [
       { id: 'intimate', label: 'More intimate', prompt: 'More intimate and private — close, personal, a moment of vulnerability.' },
     ],
   },
+  {
+    id: 'expression',
+    label: 'Expression',
+    variations: [
+      { id: 'fear', label: 'Fear', prompt: "Character expression: wide-eyed fear or dread — pupils dilated, brow raised, jaw tense." },
+      { id: 'grief', label: 'Grief', prompt: "Character expression: raw grief or anguish — eyes glistening, mouth drawn, weight of loss visible." },
+      { id: 'joy', label: 'Joy', prompt: "Character expression: genuine joy or laughter — eyes crinkled, open smile, light and alive." },
+      { id: 'rage', label: 'Rage', prompt: "Character expression: barely-contained rage — jaw set, eyes narrowed, temples tight." },
+      { id: 'resolve', label: 'Resolve', prompt: "Character expression: quiet determination — steady gaze, composed face, inner decision made." },
+      { id: 'shock', label: 'Shock', prompt: "Character expression: sudden shock or disbelief — frozen, mouth slightly open, caught off-guard." },
+    ],
+  },
 ];
