@@ -755,6 +755,11 @@ function HomePageInner() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
+          {'parsedJson' in state && state.parsedJson?.brand && (
+            <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 'bold', letterSpacing: '0.16em', textTransform: 'uppercase', fontVariant: 'small-caps', color: 'var(--ink)', marginBottom: 6 }}>
+              {state.parsedJson.brand}
+            </p>
+          )}
           <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
             {isLoaded && 'title' in state ? toTitleCase(state.title)
               : (isGenerating || isParsing) && 'title' in state && state.title ? toTitleCase(state.title)

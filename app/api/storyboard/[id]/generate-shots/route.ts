@@ -120,6 +120,13 @@ async function generateOneShot(
   if (prevFrameResult) {
     parts.push({ inlineData: { data: prevFrameResult.data, mimeType: prevFrameResult.mimeType } });
   }
+  // Style-override notice before entity references: the conditioning images define
+  // appearance (face, costume, location geography) but must not bleed their
+  // photographic or artistic style into the output — that is governed solely by
+  // the text prompt below.
+  if (conditioningImages.length > 0) {
+    parts.push({ text: '[APPEARANCE REFERENCE: The following image(s) define character/location appearance ONLY. Do NOT adopt their visual style or medium. Apply strictly the style described in the text prompt.]' });
+  }
   parts.push(
     ...conditioningImages.map((img) => ({
       inlineData: { data: img.data, mimeType: img.mimeType },

@@ -320,6 +320,7 @@ export const AuditSchema = z.object({
 
 export const ParsedStoryboardSchema = z.object({
   title: z.string().describe('The storyboard title from the H1 of the markdown.'),
+  brand: z.string().optional().describe('Client or brand name, if detected post-parse. Not output by the skill.'),
   format: z
     .enum(['ad', 'music_video', 'short_film', 'pitch_film', 'promo', 'other'])
     .describe('Inferred from the header. "other" if unclear.'),

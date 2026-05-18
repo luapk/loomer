@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import Anthropic from '@anthropic-ai/sdk';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -55,10 +56,32 @@ export async function POST(
             warnings: result.warnings,
           });
         } else {
+          // Detect brand/client name via a fast Haiku call — stored alongside the
+          // parsed storyboard so the UI can display it above the title.
+          let brand: string | undefined;
+          try {
+            const anthropicKey = process.env.ANTHROPIC_API_KEY;
+            if (anthropicKey) {
+              const anthropic = new Anthropic({ apiKey: anthropicKey });
+              const msg = await anthropic.messages.create({
+                model: 'claude-haiku-4-5-20251001',
+                max_tokens: 20,
+                messages: [{
+                  role: 'user',
+                  content: `Does this storyboard title contain a recognisable brand or client name? Title: "${result.storyboard.title}". Reply with just the brand name (e.g. "Nike" or "Temptations") or the single word "null".`,
+                }],
+              });
+              const text = msg.content[0]?.type === 'text' ? msg.content[0].text.trim() : '';
+              if (text && text.toLowerCase() !== 'null' && text.length <= 40) brand = text;
+            }
+          } catch { /* brand detection is best-effort */ }
+
+          const storyboardFinal = brand ? { ...result.storyboard, brand } : result.storyboard;
+
           await getDb().storyboard.update({
             where: { id },
             data: {
-              parsed_json: result.storyboard,
+              parsed_json: storyboardFinal,
               title: result.storyboard.title,
               status: 'PARSED',
             },
@@ -66,7 +89,7 @@ export async function POST(
           send({
             type: 'done',
             id,
-            storyboard: result.storyboard,
+            storyboard: storyboardFinal,
             warnings: result.warnings,
             usage: result.usage,
           });

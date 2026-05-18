@@ -146,7 +146,7 @@ export async function POST(
 
   const refStills: ReferenceStills = { ...existing };
   for (const entity of entitiesToGenerate) {
-    refStills[entity.id] = { status: 'pending', candidates: [], selected: null };
+    refStills[entity.id] = { status: 'pending', candidates: [], selected: existing[entity.id]?.selected ?? null };
   }
   await getDb().storyboard.update({
     where: { id },
@@ -176,7 +176,7 @@ export async function POST(
           const entityStart = Date.now();
           send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entitiesToGenerate.length });
 
-          refStills[entity.id] = { status: 'generating', candidates: [], selected: null };
+          refStills[entity.id] = { status: 'generating', candidates: [], selected: existing[entity.id]?.selected ?? null };
           await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
 
           try {
@@ -206,7 +206,7 @@ export async function POST(
             const errorMsg = candidates.length === 0
               ? rejectionMsgs[0] ?? 'All candidates failed with unknown error.'
               : undefined;
-            refStills[entity.id] = { status, candidates, selected: null, ...(errorMsg ? { error: errorMsg } : {}) };
+            refStills[entity.id] = { status, candidates, selected: existing[entity.id]?.selected ?? null, ...(errorMsg ? { error: errorMsg } : {}) };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
 
             if (candidates.length > 0) {
@@ -216,7 +216,7 @@ export async function POST(
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            refStills[entity.id] = { status: 'error', candidates: [], selected: null, error: message };
+            refStills[entity.id] = { status: 'error', candidates: [], selected: existing[entity.id]?.selected ?? null, error: message };
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
             send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
           }
