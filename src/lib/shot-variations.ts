@@ -72,6 +72,8 @@ export const SHOT_VARIATION_GROUPS: VariationGroup[] = [
       { id: 'rage', label: 'Rage', prompt: "Character expression: barely-contained rage — jaw set, eyes narrowed, temples tight." },
       { id: 'resolve', label: 'Resolve', prompt: "Character expression: quiet determination — steady gaze, composed face, inner decision made." },
       { id: 'shock', label: 'Shock', prompt: "Character expression: sudden shock or disbelief — frozen, mouth slightly open, caught off-guard." },
+      { id: 'surprise', label: 'Surprise', prompt: "Character expression: delighted surprise — eyebrows raised, eyes wide, an involuntary smile breaking through." },
+      { id: 'confusion', label: 'Confusion', prompt: "Character expression: genuine confusion or puzzlement — brow furrowed, head slightly tilted, trying to make sense of something." },
     ],
   },
 ];
