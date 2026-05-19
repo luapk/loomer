@@ -39,7 +39,7 @@ export async function POST(
 
   const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
   const blob = await put(
-    `${id}/refs/${entityId}/upload.${ext}`,
+    `${id}/refs/${entityId}/upload-${Date.now()}.${ext}`,
     file,
     { access: 'public', contentType: file.type },
   );

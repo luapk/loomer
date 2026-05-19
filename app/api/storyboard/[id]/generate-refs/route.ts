@@ -84,13 +84,14 @@ async function uploadCandidate(
   entityId: string,
   index: number,
   img: { data: string; mimeType: string },
+  runId: number,
 ): Promise<string> {
   const buffer = Buffer.from(img.data, 'base64');
   const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
   const blob = await put(
-    `${storyboardId}/refs/${entityId}/${index}.${ext}`,
+    `${storyboardId}/refs/${entityId}/${runId}-${index}.${ext}`,
     buffer,
-    { access: 'public', contentType: img.mimeType },
+    { access: 'public', allowOverwrite: true, contentType: img.mimeType },
   );
   return blob.url;
 }
@@ -138,6 +139,7 @@ export async function POST(
 
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
+  const runId = Date.now();
 
   // On force (redo), regenerate all entities. Otherwise skip ones that already have candidates.
   const existing = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
@@ -188,23 +190,30 @@ export async function POST(
             const candidateResults = await Promise.allSettled(
               [0, 1].map(async (j) => {
                 const img = await generateOneImage(ai, model, prompt);
-                const url = await uploadCandidate(id, entity.id, j, img);
+                const url = await uploadCandidate(id, entity.id, j, img, runId);
                 send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
                 return url;
               }),
             );
 
-            const candidates = candidateResults
+            const aiCandidates = candidateResults
               .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
               .map((r) => r.value);
+
+            // If the entity had a user-uploaded selected image, keep it in the
+            // candidates list so it remains visible and selectable after redo.
+            const prevSelected = existing[entity.id]?.selected ?? null;
+            const candidates = (prevSelected && !aiCandidates.includes(prevSelected))
+              ? [...aiCandidates, prevSelected]
+              : aiCandidates;
 
             // Collect actual rejection reasons — these are the real API errors
             const rejectionMsgs = candidateResults
               .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
               .map((r) => r.reason instanceof Error ? r.reason.message.slice(0, 200) : String(r.reason));
 
-            const status = candidates.length > 0 ? 'done' : 'error';
-            const errorMsg = candidates.length === 0
+            const status = aiCandidates.length > 0 ? 'done' : 'error';
+            const errorMsg = aiCandidates.length === 0
               ? rejectionMsgs[0] ?? 'All candidates failed with unknown error.'
               : undefined;
             refStills[entity.id] = { status, candidates, selected: existing[entity.id]?.selected ?? null, ...(errorMsg ? { error: errorMsg } : {}) };
