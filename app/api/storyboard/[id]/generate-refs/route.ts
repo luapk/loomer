@@ -96,10 +96,11 @@ async function uploadCandidate(
 }
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const force = new URL(request.url).searchParams.get('force') === 'true';
 
   const storyboard = await getDb().storyboard.findUnique({ where: { id } });
   if (!storyboard) {
@@ -138,11 +139,11 @@ export async function POST(
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
 
-  // Preserve any entity that already has candidates — only regenerate missing/errored ones.
+  // On force (redo), regenerate all entities. Otherwise skip ones that already have candidates.
   const existing = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
-  const entitiesToGenerate = entities.filter(
-    (e) => !(existing[e.id]?.candidates.length),
-  );
+  const entitiesToGenerate = force
+    ? entities
+    : entities.filter((e) => !(existing[e.id]?.candidates.length));
 
   const refStills: ReferenceStills = { ...existing };
   for (const entity of entitiesToGenerate) {

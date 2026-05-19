@@ -245,7 +245,7 @@ function HomePageInner() {
     });
   }
 
-  async function startGeneration(id: string) {
+  async function startGeneration(id: string, force = false) {
     if (refsInFlight.current) return;
     refsInFlight.current = true;
     // Save settings, then start the SSE generation stream
@@ -267,7 +267,7 @@ function HomePageInner() {
 
     let res: Response;
     try {
-      res = await fetch(`/api/storyboard/${id}/generate-refs`, { method: 'POST' });
+      res = await fetch(`/api/storyboard/${id}/generate-refs${force ? '?force=true' : ''}`, { method: 'POST' });
     } catch {
       setState((prev) =>
         prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
@@ -936,7 +936,10 @@ function HomePageInner() {
                 </div>
               ) : (
                 <Button
-                  onClick={() => { void startGeneration(state.id); }}
+                  onClick={() => {
+                    const isRedo = state.phase === 'refs_done' || state.phase === 'generating_shots' || state.phase === 'shots_done';
+                    void startGeneration(state.id, isRedo);
+                  }}
                   disabled={modelsLoading || shotsGenerating}
                   variant="secondary"
                   size="sm"
