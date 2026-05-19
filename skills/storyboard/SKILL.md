@@ -1,11 +1,11 @@
 ---
 name: storyboard
-description: Use this skill whenever the user wants to develop a storyboard, write sequential AI video generation prompts, or break a script, premise, or beat-list into a shot-by-shot visual sequence. Trigger on phrases like "storyboard," "shot list," "break this into shots," "AI video prompts," "Veo 3 prompts," "Kling prompts," "sequence of clips," "storyboard for an ad / music video / short film." Trigger when the user gives a script, premise, beat-list, or rough idea to develop into a sequential plan another model can generate as video. Produces craft-grade storyboards informed by Daniel Arijon's Grammar of the Film Language — shots respecting line of interest, screen direction, eyeline matching, and the triangle principle. Output is rich markdown with a continuity bible, Arijon grammar metadata per shot, and ready-to-use Veo 3.1 and Kling 2.5+ prompts. Default aesthetic is cinematic photoreal. Do NOT use for static decks, one-off prompts, film criticism, or screenplay drafting.
+description: Use this skill whenever the user wants to develop a storyboard, write sequential AI image/video generation prompts, or break a script, premise, or beat-list into a shot-by-shot visual sequence. Trigger on phrases like "storyboard," "shot list," "break this into shots," "AI video prompts," "sequence of clips," "storyboard for an ad / music video / short film." Trigger when the user gives a script, premise, beat-list, or rough idea to develop into a sequential plan another model can generate as video or stills. Produces craft-grade storyboards informed by Daniel Arijon's Grammar of the Film Language — shots respecting line of interest, screen direction, eyeline matching, and the triangle principle. Output is rich markdown with a continuity bible, Arijon grammar metadata per shot, and a still key_frame_prompt per shot for image generation. Default aesthetic is cinematic photoreal. Do NOT use for static decks, one-off prompts, film criticism, or screenplay drafting.
 ---
 
 # Storyboard
 
-This skill produces storyboards for AI video generation that are spatially coherent, narratively compelling, and visually followable. It encodes the cinematic grammar of Daniel Arijon's *Grammar of the Film Language* (1976) — the canonical text on shot composition, screen direction, and editing continuity — and translates it into sequential prompts for Veo 3.1 and Kling 2.5+.
+This skill produces storyboards for AI image and video generation that are spatially coherent, narratively compelling, and visually followable. It encodes the cinematic grammar of Daniel Arijon's *Grammar of the Film Language* (1976) — the canonical text on shot composition, screen direction, and editing continuity — and translates it into sequential still key frame prompts for image generation.
 
 A storyboard from this skill is not a list of pretty shots. It is a system for moving an audience through space and time without losing them. Every shot has a function. Every cut has a rule. Every prompt carries forward the continuity that AI video models otherwise break.
 
@@ -27,8 +27,6 @@ Read these as needed during the workflow. Read `arijon-grammar.md` and `narrativ
 - `references/narrative-followability.md` — **Read every time.** How to make a sequence of shots tell a story that is compelling, creative, *and* followable. The audience's WHO/WHERE/WHAT/WHEN/WHY questions, withholding and reveal, subtext through framing, visual rhyme between shots.
 - `references/continuity-bible.md` — How to construct the Bible (characters, locations, props) and how to inject it into every prompt. Templates for each entity type.
 - `references/shot-vocabulary.md` — Shot distances (ECU through EWS), angles (high/low/dutch/POV/OTS), camera moves (static/pan/tilt/dolly/track/crane/zoom/handheld/gimbal/drone), lenses (16mm/35mm/50mm/85mm) — what each *says* and when to use it.
-- `references/veo3-prompting.md` — How to write a Veo 3.1 prompt: the 7-layer template, native audio syntax (dialogue in quotes, SFX, ambient), 4/6/8s clip discipline, first/last frame conditioning for chaining, negative phrasing.
-- `references/kling-prompting.md` — How to write a Kling 2.5/2.6 prompt: the prompt spine, motion vocabulary, beats/duration markers, the "no handheld shake" trick, 5s/10s clip discipline, start/end frame for consistency.
 - `references/cinematic-style-library.md` — The default photoreal aesthetic library: photographer references (Hido, McLellan, Hawkesworth, Bush, Soth), DP references (Lubezki, Khondji, Deakins, Doyle), light qualities, lens-feeling vocabulary, film stock cues. Use this to lock a consistent look across the whole storyboard.
 - `references/output-template.md` — The exact markdown structure to output. Includes the bible header, per-shot block, and the followability audit footer.
 
@@ -90,9 +88,9 @@ Now translate beats into shots. Open `references/arijon-grammar.md` and `referen
 
 Produce a shot list with these annotations *before* writing prompts. This is the storyboard skeleton.
 
-### Step 5 — Write per-shot prompts (Veo 3 + Kling)
+### Step 5 — Write per-shot key frame prompts
 
-Now the prompts. Read `references/veo3-prompting.md` and `references/kling-prompting.md` and `references/cinematic-style-library.md`.
+Now the prompts. Read `references/cinematic-style-library.md`.
 
 For each shot, produce a markdown block following `references/output-template.md`. Each block contains:
 
@@ -102,15 +100,11 @@ For each shot, produce a markdown block following `references/output-template.md
 - **Continuity check** — which Bible entries appear, which props persist from previous shots, what time of day / light direction
 - **Action / beat** — what happens, with physics-specific verbs
 - **Dialogue / VO / sound** — only what this shot carries
-- **Duration** — 4 / 6 / 8s for Veo 3, 5 / 10s for Kling — pick consciously
-- **Veo 3.1 prompt** — paragraph form, 100–150 words, all 7 layers, audio inline in quotes, character description from Bible verbatim
-- **Kling 2.5 prompt** — Subject + Action + Environment + Camera Movement + Lighting/Atmosphere structure, motion-led, beats/duration markers if precision matters
+- **Key frame prompt** — A still-image composition prompt: the frozen decisive moment of the shot. Describe the frame as a photograph — subject (character descriptions verbatim from Bible), pose and expression at the peak action moment, environment, light direction, lens, depth of field, colour palette. No motion verbs, no temporal language ("as she turns", "while he walks"), no audio. ~80–150 words. This is injected directly into the image model alongside Bible reference stills.
 
 For dialogue and voiceover *content*, the lines themselves should follow craft-grade copywriting principles — restraint, subtext, no over-writing, trust the audience. If the user has the copywriting skill installed, draw on its anti-patterns and craft canon for the actual word choice. Lines like "Welcome to the future of dog food" are exactly what to avoid.
 
 Default style is cinematic photoreal — apply the style library throughout unless the user specified otherwise. Lock film stock / lens / lighting style across the whole storyboard so the look is consistent shot to shot.
-
-For **Veo 3.1 first/last frame chaining** or **Kling start/end frame** workflows, note in the shot block which shots are intended as chained pairs. This is the most reliable way to maintain character/wardrobe consistency across cuts when the user has access to those features.
 
 ### Step 6 — Followability audit
 
@@ -141,7 +135,7 @@ The output is always a single, complete markdown document containing:
 
 Do not present three modes ("here's a markdown version, here's a JSON version"). Markdown only, per user preference.
 
-For long pieces (40+ shots, e.g. a music video), the per-shot block can use a *compact mode* — same fields, less prose — but never drop the Veo 3 / Kling prompts or the grammar metadata. Brevity in the descriptive fields is fine; brevity in the actual prompts and grammar is not.
+For long pieces (40+ shots, e.g. a music video), the per-shot block can use a *compact mode* — same fields, less prose — but never drop the key frame prompt or the grammar metadata. Brevity in the descriptive fields is fine; brevity in the actual prompt and grammar is not.
 
 ---
 

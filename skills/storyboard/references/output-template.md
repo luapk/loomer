@@ -30,11 +30,11 @@ This is the exact markdown structure every storyboard from this skill outputs. F
 
 ## Shot list summary
 
-| # | Scale | Camera | Loc | Subject(s) | Direction | Dur | Function |
-|---|---|---|---|---|---|---|---|
-| 01 | EWS | Static | LOC-STREET-DAWN | — | — | 4s | Establishing |
-| 02 | MS | Dolly-in | LOC-KITCHEN-MORNING | CHAR-MAYA | → | 6s | Introduce protagonist |
-| ... | ... | ... | ... | ... | ... | ... | ... |
+| # | Scale | Camera | Loc | Subject(s) | Direction | Function |
+|---|---|---|---|---|---|---|
+| 01 | EWS | Static | LOC-STREET-DAWN | — | — | Establishing |
+| 02 | MS | Dolly-in | LOC-KITCHEN-MORNING | CHAR-MAYA | → | Introduce protagonist |
+| ... | ... | ... | ... | ... | ... | ... |
 
 ## Per-shot blocks
 
@@ -86,30 +86,11 @@ This is the exact markdown structure every storyboard from this skill outputs. F
 - Ambient: [Background soundscape]
 - Music: [If diegetic — a radio, a hummed tune. Score is left for post unless specified.]
 
-**Duration**: [4 / 6 / 8s for Veo, 5 / 10s for Kling]
-
-**Chain instruction (if applicable)**:
-[CHAIN: end-frame-of-N → start-frame-of-(N+1)]
-[Or: KLING: image-to-video using Nano Banana reference still]
-[Or: KLING: start-frame [N] / end-frame [N+1] for chained generation]
-[Or: — (no chaining)]
-
 ---
 
-#### Veo 3.1 prompt
+#### Key frame prompt
 
-> [Full paragraph-form prompt, 100–150 words, all 7 layers, Bible descriptions verbatim, audio inline.]
-
----
-
-#### Kling 2.5 prompt
-
-> SUBJECT: [Bible-verbatim character description.]
-> ACTION: [Concrete verb-led action.]
-> ENVIRONMENT: [Bible-verbatim setting.]
-> CAMERA: [Explicit motion + lens + height.]
-> LIGHTING: [Source + behaviour.]
-> STYLE: [Style lock from top of doc.]
+> [Still-image composition prompt, ~80–150 words. Describe the frozen decisive moment: subject (Bible descriptions verbatim), pose and expression, environment, light source and direction, lens, depth of field, colour palette. No motion verbs, no temporal language, no audio. This is injected into the image model alongside Bible reference stills.]
 
 ---
 ```
@@ -133,20 +114,13 @@ For music videos, longer films, or any storyboard where the per-shot block above
 
 **Audio**: [Dialogue / SFX / Ambient compressed to one line.]
 
-**Duration**: [Number]s
-
-**Chain**: [If any.]
-
-**Veo 3.1 prompt**:
-> [Full prompt — same length and quality as standard mode. Don't compress prompts.]
-
-**Kling 2.5 prompt**:
-> [Full prompt — same structure as standard mode. Don't compress prompts.]
+**Key frame prompt**:
+> [Full prompt — same length and quality as standard mode. Don't compress.]
 
 ---
 ```
 
-The rule: prompts and grammar are never compressed; the descriptive prose (function, action) can be tightened.
+The rule: the key frame prompt and grammar are never compressed; the descriptive prose (function, action) can be tightened.
 
 ---
 
