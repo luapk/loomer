@@ -426,19 +426,7 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
     }
   }
 
-  // Check 5: total Veo duration roughly matches stated duration_seconds
-  // (within ±20% tolerance — there's edit overhead and pacing)
-  // Skip if durations not yet populated (deferred until video generation).
-  const totalVeoDuration = sb.shots.reduce((sum, shot) => sum + (shot.duration?.veo ?? 0), 0);
-  const tolerance = sb.duration_seconds * 0.2;
-  if (totalVeoDuration > 0 && Math.abs(totalVeoDuration - sb.duration_seconds) > tolerance) {
-    warnings.push(
-      `Stated duration ${sb.duration_seconds}s but sum of Veo shot durations is ${totalVeoDuration}s ` +
-        `(>20% mismatch)`,
-    );
-  }
-
-  // Check 6: key_frame_prompt is non-trivially long
+  // Check 5: key_frame_prompt is non-trivially long
   // (a 50-char prompt is almost certainly a parser miss)
   for (const shot of sb.shots) {
     if (shot.key_frame_prompt.length < 100) {

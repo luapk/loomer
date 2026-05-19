@@ -115,7 +115,6 @@ async function main() {
       `  ${String(shot.shot_number).padStart(2, '0')}. ` +
         `${shot.grammar.scale.padEnd(4)} | ` +
         `${shot.continuity.location_id.padEnd(30).slice(0, 30)} | ` +
-        `${shot.duration?.veo ?? '?'}s/${shot.duration?.kling ?? '?'}s | ` +
         c.dim(`kf:${keyFrameLen}`),
     );
     console.log(c.dim(`      ${shot.descriptor}`));
