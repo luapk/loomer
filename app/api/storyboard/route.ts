@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
         // that prompt, cutting ~30% off time-to-first-token.
         const messageStream = client.beta.promptCaching.messages.stream({
           model: MODEL,
-          max_tokens: 32000,
+          max_tokens: 20000,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: script }],
         });
