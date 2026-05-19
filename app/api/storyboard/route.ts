@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
         // that prompt, cutting ~30% off time-to-first-token.
         const messageStream = client.beta.promptCaching.messages.stream({
           model: MODEL,
-          max_tokens: 12000,
+          max_tokens: 20000,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: script }],
         });
