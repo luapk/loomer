@@ -88,13 +88,17 @@ export async function POST(request: NextRequest) {
         try { controller.enqueue(encoder.encode(': heartbeat\n\n')); } catch { /* closed */ }
       }, 10000);
 
+      // Send the storyboard ID immediately so the client can recover if the
+      // SSE stream is interrupted (e.g. browser backgrounded on mobile).
+      send({ type: 'init', id: storyboard.id });
+
       try {
         // Use the prompt-caching beta so the 105KB skill system prompt is cached
         // server-side. Cache TTL is 5 minutes — subsequent requests skip re-encoding
         // that prompt, cutting ~30% off time-to-first-token.
         const messageStream = client.beta.promptCaching.messages.stream({
           model: MODEL,
-          max_tokens: 8000,
+          max_tokens: 32000,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: script }],
         });

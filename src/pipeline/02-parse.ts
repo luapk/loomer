@@ -51,7 +51,7 @@ export interface ParseOptions {
   apiKey?: string;
   /** Model to use. Defaults to claude-sonnet-4-6. */
   model?: string;
-  /** Max output tokens. Defaults to 32000 — the Leo storyboard (14 shots) uses ~20-25k tokens. */
+  /** Max output tokens. Defaults to 64000 — supports storyboards up to ~40+ shots. */
   maxTokens?: number;
   /** Whether to log progress to stdout. Defaults to false. */
   verbose?: boolean;
@@ -83,7 +83,7 @@ export async function parseStoryboard(
   }
 
   const model = options.model ?? 'claude-sonnet-4-6';
-  const maxTokens = options.maxTokens ?? 32000;
+  const maxTokens = options.maxTokens ?? 64000;
   const verbose = options.verbose ?? false;
 
   const client = new Anthropic({ apiKey });

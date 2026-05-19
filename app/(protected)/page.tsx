@@ -107,6 +107,19 @@ function HomePageInner() {
   const [shotsGenerating, setShotsGenerating] = useState(false);
   const refsInFlight = useRef(false);
 
+  // Active SSE reader — stored so Cancel can abort it
+  const activeReaderRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+  const isCancelledRef = useRef(false);
+  // Storyboard ID received from the server during generation (before done event)
+  const pendingStoryboardIdRef = useRef<string | null>(null);
+
+  function cancelActive() {
+    isCancelledRef.current = true;
+    activeReaderRef.current?.cancel().catch(() => {});
+    activeReaderRef.current = null;
+    setState({ phase: 'empty' });
+  }
+
   // Continuity check
   const [continuityIssues, setContinuityIssues] = useState<ContinuityIssue[]>([]);
   const [continuityChecking, setContinuityChecking] = useState(false);
@@ -532,6 +545,8 @@ function HomePageInner() {
     }
 
     const reader = res.body.getReader();
+    activeReaderRef.current = reader;
+    isCancelledRef.current = false;
     const decoder = new TextDecoder();
     let buffer = '';
 
@@ -589,6 +604,7 @@ function HomePageInner() {
         }
       }
     } catch {
+      if (isCancelledRef.current) return;
       // Connection dropped — check if the parse already completed in the DB
       // before showing an error. This recovers from transient network blips
       // where the server finished but the SSE stream closed before the client
@@ -613,8 +629,11 @@ function HomePageInner() {
       } catch { /* ignore recovery errors, fall through to error state */ }
       setState({ phase: 'error', message: 'Lost connection during parse. Please try again.' });
       return;
+    } finally {
+      activeReaderRef.current = null;
     }
     // Stream closed without done/error event
+    if (isCancelledRef.current) return;
     setState((prev) =>
       prev.phase === 'parsing'
         ? { phase: 'error', message: 'Parse timed out. Please try again.' }
@@ -660,6 +679,9 @@ function HomePageInner() {
     }
 
     const reader = res.body.getReader();
+    activeReaderRef.current = reader;
+    isCancelledRef.current = false;
+    pendingStoryboardIdRef.current = null;
     const decoder = new TextDecoder();
     let buffer = '';
 
@@ -676,7 +698,10 @@ function HomePageInner() {
           if (!part.startsWith('data: ')) continue;
           const payload = JSON.parse(part.slice(6)) as Record<string, unknown>;
 
-          if (payload['type'] === 'chunk') {
+          if (payload['type'] === 'init') {
+            // Server sends the storyboard ID early so we can recover if connection drops.
+            pendingStoryboardIdRef.current = payload['id'] as string;
+          } else if (payload['type'] === 'chunk') {
             const text = payload['text'] as string;
             setState((prev) =>
               prev.phase === 'generating'
@@ -700,9 +725,29 @@ function HomePageInner() {
         }
       }
     } catch {
+      if (isCancelledRef.current) return;
       setState({ phase: 'error', message: 'Lost connection to server mid-generation.' });
+      return;
+    } finally {
+      activeReaderRef.current = null;
     }
-    // Stream closed without a done/error event (Vercel timeout or premature close)
+    if (isCancelledRef.current) return;
+    // Stream closed without a done/error event — check if the server actually
+    // finished and saved the storyboard (e.g. browser was backgrounded on mobile).
+    const sbId = pendingStoryboardIdRef.current;
+    if (sbId) {
+      try {
+        const check = await fetch(`/api/storyboard/${sbId}`);
+        if (check.ok) {
+          const data = await check.json() as { status?: string; source_markdown?: string; title?: string };
+          if (data.status === 'DRAFT' && data.source_markdown) {
+            setDevStats((prev) => ({ ...prev, generateEnd: Date.now(), parseStart: Date.now() }));
+            await doParse(sbId, data.title ?? 'Untitled', data.source_markdown);
+            return;
+          }
+        }
+      } catch { /* ignore recovery errors */ }
+    }
     setState((prev) =>
       prev.phase === 'generating'
         ? { phase: 'error', message: 'Generation timed out. Please try again — subsequent runs are faster once the prompt is cached.' }
@@ -1025,10 +1070,15 @@ function HomePageInner() {
           {/* Progress — generating */}
           {isGenerating && (
             <div className="glass rounded-2xl p-6 space-y-3">
-              <p className="text-xs text-stone-500 flex items-center gap-2">
-                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-                {generateMessage}
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-stone-500 flex items-center gap-2">
+                  <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                  {generateMessage}
+                </p>
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-stone-400 hover:text-stone-600" onClick={cancelActive}>
+                  <X className="h-3 w-3 mr-1" />Cancel
+                </Button>
+              </div>
               <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed border border-stone-100">
                 {'markdown' in state ? state.markdown : ''}
                 <span className="inline-block w-1.5 h-3 bg-stone-400 animate-pulse ml-0.5 align-middle" />
@@ -1039,13 +1089,19 @@ function HomePageInner() {
           {/* Progress — parsing */}
           {isParsing && (
             <div className="glass rounded-2xl p-6 space-y-2">
-              <p className="text-xs text-stone-500 flex items-center gap-2">
-                <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-                {parseMessage}
-                {state.phase === 'parsing' && state.charsGenerated > 0 && (
-                  <span className="text-stone-400">· {state.charsGenerated.toLocaleString()} chars</span>
-                )}
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-stone-500 flex items-center gap-2">
+                  <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
+                  {parseMessage}
+                  {state.phase === 'parsing' && state.charsGenerated > 0 && (
+                    <span className="text-stone-400">· {state.charsGenerated.toLocaleString()} chars</span>
+                  )}
+                </p>
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-stone-400 hover:text-stone-600" onClick={cancelActive}>
+                  <X className="h-3 w-3 mr-1" />Cancel
+                </Button>
+              </div>
+              <p className="text-xs text-stone-400">This runs on our server — you can leave this page open and come back.</p>
             </div>
           )}
 
