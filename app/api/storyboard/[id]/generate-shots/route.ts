@@ -207,6 +207,7 @@ export async function POST(
 
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
+  const runId = Date.now();
 
   // Initialise all shots as pending before streaming starts.
   const shotKeyFrames: ShotKeyFrames = {};
@@ -285,9 +286,9 @@ export async function POST(
                 const buffer = Buffer.from(img.data, 'base64');
                 const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
                 const blob = await put(
-                  `${id}/shots/${shot.shot_number}.${ext}`,
+                  `${id}/shots/${shot.shot_number}-${runId}.${ext}`,
                   buffer,
-                  { access: 'public', allowOverwrite: true, contentType: img.mimeType },
+                  { access: 'public', contentType: img.mimeType },
                 );
 
                 const durationMs = Date.now() - shotStart;
