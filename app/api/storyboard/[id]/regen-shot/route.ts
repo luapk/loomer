@@ -32,6 +32,21 @@ function buildShotPrompt(
   return `Style: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
 }
 
+function buildStyleDeclaration(
+  renderStyle: string,
+  styleLock: ParsedStoryboard['style_lock'],
+): string {
+  if (renderStyle === 'WATERCOLOUR_SKETCH') {
+    return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  }
+  const styleParts = [styleLock.look];
+  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
+  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
+  styleParts.push(styleLock.colour_grade);
+  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
+  return `OUTPUT STYLE (mandatory): ${styleParts.join(' ')} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+}
+
 // ---------------------------------------------------------------------------
 // Conditioning image helper (duplicated from generate-shots)
 // ---------------------------------------------------------------------------
@@ -61,6 +76,7 @@ async function generateOneShot(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
+  styleDeclaration: string,
   conditioningEntities: { name: string; url: string }[],
 ): Promise<{ data: string; mimeType: string } | null> {
   const entityResults = await Promise.all(
@@ -74,8 +90,12 @@ async function generateOneShot(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
 
+  // Style declaration first — anchors the output medium before the model sees
+  // any photographic reference images.
+  parts.push({ text: styleDeclaration });
+
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the authoritative appearance for each character and location. Reproduce their exact faces, features, clothing, colours, and visual identity in the output. The text prompt describes what is happening and the composition — it does NOT override the appearance shown here. Do NOT adopt the photographic style of the reference images; apply only the style from the text prompt.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define who and what the subjects are — faces, features, clothing, colours. Extract their identity and render it in the OUTPUT STYLE declared above. Do NOT copy the photographic or artistic medium of these references — translate their appearance into the declared output style.]' });
     for (const { name, img } of loadedEntities) {
       parts.push({ text: `[Reference — ${name}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
@@ -199,11 +219,12 @@ export async function POST(
     })
     .filter((e): e is { name: string; url: string } => e !== null);
 
+  const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
   const ai = new GoogleGenAI({ apiKey });
 
   let img: { data: string; mimeType: string } | null;
   try {
-    img = await generateOneShot(ai, model, prompt, conditioningEntities);
+    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `Image generation failed: ${message}` }, { status: 502 });

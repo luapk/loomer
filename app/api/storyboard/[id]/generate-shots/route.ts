@@ -45,6 +45,23 @@ function buildShotPrompt(
   return `Style: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
 }
 
+// Returns a terse style declaration placed BEFORE reference images so the model
+// anchors to the output medium before it sees any photographic references.
+function buildStyleDeclaration(
+  renderStyle: string,
+  styleLock: ParsedStoryboard['style_lock'],
+): string {
+  if (renderStyle === 'WATERCOLOUR_SKETCH') {
+    return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  }
+  const styleParts = [styleLock.look];
+  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
+  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
+  styleParts.push(styleLock.colour_grade);
+  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
+  return `OUTPUT STYLE (mandatory): ${styleParts.join(' ')} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+}
+
 // ---------------------------------------------------------------------------
 // Scene grouping — consecutive shots sharing the same location_id form a scene
 // ---------------------------------------------------------------------------
@@ -101,6 +118,7 @@ async function generateOneShot(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
+  styleDeclaration: string,
   conditioningEntities: { name: string; url: string }[],
   prevFrameUrl: string | null,
 ): Promise<{ data: string; mimeType: string } | null> {
@@ -112,33 +130,33 @@ async function generateOneShot(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
 
-  // Prev frame comes first — most contextually relevant for spatial continuity.
+  // Style declaration comes FIRST — before any images — so the model anchors to
+  // the output medium before it sees photographic references.
+  parts.push({ text: styleDeclaration });
+
+  // Prev frame for spatial continuity within the scene.
   if (prevFrameResult) {
+    parts.push({ text: '[CONTINUITY REFERENCE: The following image is the immediately preceding shot in this scene. Maintain spatial consistency — character screen-side positions, eyeline directions, room geography — but render in the OUTPUT STYLE declared above.]' });
     parts.push({ inlineData: { data: prevFrameResult.data, mimeType: prevFrameResult.mimeType } });
   }
 
-  // Named identity references. Each ref is labelled so the model knows exactly
-  // which entity it represents. The override instruction makes clear that these
-  // images are the authoritative appearance source — the text prompt describes
-  // action and composition, NOT how characters or locations look.
+  // Named identity references. Each ref is labelled so the model knows which
+  // entity it represents. The model must extract identity (face, features,
+  // clothing) and render it in the declared output style — NOT copy the
+  // photographic medium of the reference.
   const loadedEntities = conditioningEntities
     .map((e, i) => ({ name: e.name, img: entityResults[i] ?? null }))
     .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e.img !== null);
 
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the authoritative appearance for each character and location. Reproduce their exact faces, features, clothing, colours, and visual identity in the output. The text prompt describes what is happening and the composition — it does NOT override the appearance shown here. Do NOT adopt the photographic style of the reference images; apply only the style from the text prompt.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define who and what the subjects are — faces, features, clothing, colours. Extract their identity and render it in the OUTPUT STYLE declared above. Do NOT copy the photographic or artistic medium of these references — translate their appearance into the declared output style.]' });
     for (const { name, img } of loadedEntities) {
       parts.push({ text: `[Reference — ${name}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
     }
   }
 
-  // Tell the model what the first image is when a prev frame is present.
-  const fullPrompt = prevFrameResult
-    ? `[CONTINUITY: The first image is the immediately preceding shot in this scene. Maintain spatial consistency — preserve character screen-side positions, eyeline directions, and room geography from that frame.]\n\n${prompt}`
-    : prompt;
-
-  parts.push({ text: fullPrompt });
+  parts.push({ text: prompt });
 
   const delays = [5000, 15000, 30000];
   for (let attempt = 0; attempt <= delays.length; attempt++) {
@@ -264,6 +282,7 @@ export async function POST(
 
               try {
                 const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock);
+                const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
 
                 const entityIds: string[] = [
                   ...shot.continuity.characters,
@@ -278,7 +297,7 @@ export async function POST(
                   })
                   .filter((e): e is { name: string; url: string } => e !== null);
 
-                const img = await generateOneShot(ai, model, prompt, conditioningEntities, prevShotUrl);
+                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevShotUrl);
 
                 if (!img) {
                   const durationMs = Date.now() - shotStart;
