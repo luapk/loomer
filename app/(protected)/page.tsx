@@ -257,11 +257,12 @@ function HomePageInner() {
     });
 
     setState((prev) =>
-      prev.phase === 'parsed' || prev.phase === 'refs_done'
+      prev.phase === 'parsed' || prev.phase === 'refs_done' || prev.phase === 'shots_done'
         ? { ...prev, phase: 'generating_refs' }
         : prev,
     );
-    setRefStills({});
+    // Don't clear refStills here — keep existing stills visible while new ones generate.
+    // Individual entities update to 'generating' as the SSE entity_start events arrive.
     setRefsCurrentEntity(null);
     setActiveTab('images');
     setDevStats((prev) => ({ ...prev, refsStart: Date.now(), refsEnd: undefined, entities: [] }));
@@ -270,6 +271,7 @@ function HomePageInner() {
     try {
       res = await fetch(`/api/storyboard/${id}/generate-refs${force ? '?force=true' : ''}`, { method: 'POST' });
     } catch {
+      refsInFlight.current = false;
       setState((prev) =>
         prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
       );
@@ -277,6 +279,7 @@ function HomePageInner() {
     }
 
     if (!res.body || !res.ok) {
+      refsInFlight.current = false;
       setState((prev) =>
         prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
       );
@@ -312,7 +315,8 @@ function HomePageInner() {
             setRefsCurrentEntity(entityId);
             setRefStills((prev) => ({
               ...prev,
-              [entityId]: { status: 'generating', candidates: [], selected: null },
+              // Preserve selected so hasAnyApproved stays true during generation.
+              [entityId]: { status: 'generating', candidates: prev[entityId]?.candidates ?? [], selected: prev[entityId]?.selected ?? null },
             }));
             setDevStats((prev) => ({
               ...prev,
@@ -351,7 +355,8 @@ function HomePageInner() {
             setRefsCurrentEntity(null);
             setRefStills((prev) => ({
               ...prev,
-              [entityId]: { status: 'error', candidates: [], selected: null, error: message },
+              // Preserve selected so a failed candidate doesn't wipe an approved image.
+              [entityId]: { status: 'error', candidates: prev[entityId]?.candidates ?? [], selected: prev[entityId]?.selected ?? null, error: message },
             }));
             setDevStats((prev) => ({
               ...prev,
