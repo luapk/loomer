@@ -139,7 +139,8 @@ function HomePageInner() {
       .then((r) => r.json())
       .then((data: { models: ImageModel[] }) => {
         setAvailableModels(data.models ?? []);
-        if (data.models?.[0]) setImageModel(data.models[0].id);
+        // Only set default model if none was loaded from DB yet
+        setImageModel((prev) => prev || data.models?.[0]?.id || prev);
       })
       .catch(() => {})
       .finally(() => setModelsLoading(false));
@@ -390,7 +391,7 @@ function HomePageInner() {
 
   async function startShotGeneration(id: string) {
     setState((prev) =>
-      prev.phase === 'refs_done' || prev.phase === 'parsed'
+      prev.phase === 'refs_done' || prev.phase === 'parsed' || prev.phase === 'shots_done'
         ? { ...prev, phase: 'generating_shots' }
         : prev,
     );
@@ -718,7 +719,7 @@ function HomePageInner() {
   const hasShots = isLoaded;
   const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done' ||
     state.phase === 'generating_shots' || state.phase === 'shots_done';
-  const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done';
+  const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done' || Object.keys(shotKeyFrames).length > 0;
 
   // Completion state for green tick icons
   const storyboardComplete = isLoaded;
@@ -951,7 +952,7 @@ function HomePageInner() {
               )}
 
               {/* Generate boards — only once some refs are approved */}
-              {(state.phase === 'refs_done' || state.phase === 'shots_done') && hasAnyApproved && (
+              {(state.phase === 'refs_done' || state.phase === 'shots_done' || state.phase === 'generating_shots') && hasAnyApproved && (
                 shotsGenerating ? (
                   <div className="flex items-center gap-2 text-xs text-stone-500">
                     <Loader2 className="h-3 w-3 animate-spin" />
@@ -961,11 +962,11 @@ function HomePageInner() {
                   <Button
                     onClick={() => { void startShotGeneration(state.id); }}
                     disabled={modelsLoading}
-                    variant={state.phase === 'shots_done' ? 'secondary' : 'default'}
-                    size={state.phase === 'shots_done' ? 'sm' : 'default'}
+                    variant={Object.keys(shotKeyFrames).length > 0 ? 'secondary' : 'default'}
+                    size={Object.keys(shotKeyFrames).length > 0 ? 'sm' : 'default'}
                   >
                     <Film className="h-4 w-4" />
-                    {state.phase === 'shots_done' ? 'Regenerate boards' : 'Generate boards'}
+                    {Object.keys(shotKeyFrames).length > 0 ? 'Regenerate boards' : 'Generate boards'}
                     <ChevronRight className="h-4 w-4" />
                   </Button>
                 )
