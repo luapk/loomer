@@ -61,27 +61,26 @@ async function generateOneShot(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-  conditioningUrls: string[],
+  conditioningEntities: { name: string; url: string }[],
 ): Promise<{ data: string; mimeType: string } | null> {
-  const conditioningResults = await Promise.all(
-    conditioningUrls.map((url) => fetchImageAsBase64(url)),
+  const entityResults = await Promise.all(
+    conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
   );
-  const conditioningImages = conditioningResults.filter(
-    (r): r is { data: string; mimeType: string } => r !== null,
-  );
+
+  const loadedEntities = conditioningEntities
+    .map((e, i) => ({ name: e.name, img: entityResults[i] ?? null }))
+    .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e.img !== null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
 
-  // Appearance-reference override: refs define look only, not composition or style.
-  if (conditioningImages.length > 0) {
-    parts.push({ text: '[APPEARANCE REFERENCE: The following image(s) define character/location appearance ONLY. Do NOT adopt their visual style, medium, or camera angle. Apply strictly the style and composition described in the text prompt.]' });
+  if (loadedEntities.length > 0) {
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the authoritative appearance for each character and location. Reproduce their exact faces, features, clothing, colours, and visual identity in the output. The text prompt describes what is happening and the composition — it does NOT override the appearance shown here. Do NOT adopt the photographic style of the reference images; apply only the style from the text prompt.]' });
+    for (const { name, img } of loadedEntities) {
+      parts.push({ text: `[Reference — ${name}:]` });
+      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
+    }
   }
-  parts.push(
-    ...conditioningImages.map((img) => ({
-      inlineData: { data: img.data, mimeType: img.mimeType },
-    })),
-  );
   parts.push({ text: prompt });
 
   const delays = [5000, 15000, 30000];
@@ -177,10 +176,15 @@ export async function POST(
     prompt += `\n\nDirector's note: ${variations.join(' ')}`;
   }
 
-  // Collect conditioning ref URLs from the shot's continuity.
+  // Build entity name lookup and collect named conditioning refs.
   const refStills = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
+
+  const entityNames: Record<string, string> = {};
+  for (const c of parsed.characters) entityNames[c.id] = c.name;
+  for (const l of parsed.locations) entityNames[l.id] = l.name;
+  for (const p of parsed.props) entityNames[p.id] = p.name;
 
   const entityIds: string[] = [
     ...shot.continuity.characters,
@@ -188,15 +192,18 @@ export async function POST(
     ...shot.continuity.props_persisting,
     ...shot.continuity.props_introduced,
   ];
-  const conditioningUrls = entityIds
-    .map((entityId) => selectedRefUrl(entityId))
-    .filter((url): url is string => url !== null);
+  const conditioningEntities = entityIds
+    .map((entityId) => {
+      const url = selectedRefUrl(entityId);
+      return url ? { name: entityNames[entityId] ?? entityId, url } : null;
+    })
+    .filter((e): e is { name: string; url: string } => e !== null);
 
   const ai = new GoogleGenAI({ apiKey });
 
   let img: { data: string; mimeType: string } | null;
   try {
-    img = await generateOneShot(ai, model, prompt, conditioningUrls);
+    img = await generateOneShot(ai, model, prompt, conditioningEntities);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `Image generation failed: ${message}` }, { status: 502 });

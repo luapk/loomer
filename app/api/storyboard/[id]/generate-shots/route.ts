@@ -101,17 +101,13 @@ async function generateOneShot(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-  conditioningUrls: string[],
+  conditioningEntities: { name: string; url: string }[],
   prevFrameUrl: string | null,
 ): Promise<{ data: string; mimeType: string } | null> {
   const [prevFrameResult, ...entityResults] = await Promise.all([
     prevFrameUrl ? fetchImageAsBase64(prevFrameUrl) : Promise.resolve(null),
-    ...conditioningUrls.map((url) => fetchImageAsBase64(url)),
+    ...conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
   ]);
-
-  const conditioningImages = entityResults.filter(
-    (r): r is { data: string; mimeType: string } => r !== null,
-  );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
@@ -120,18 +116,22 @@ async function generateOneShot(
   if (prevFrameResult) {
     parts.push({ inlineData: { data: prevFrameResult.data, mimeType: prevFrameResult.mimeType } });
   }
-  // Style-override notice before entity references: the conditioning images define
-  // appearance (face, costume, location geography) but must not bleed their
-  // photographic or artistic style into the output — that is governed solely by
-  // the text prompt below.
-  if (conditioningImages.length > 0) {
-    parts.push({ text: '[APPEARANCE REFERENCE: The following image(s) define character/location appearance ONLY. Do NOT adopt their visual style or medium. Apply strictly the style described in the text prompt.]' });
+
+  // Named identity references. Each ref is labelled so the model knows exactly
+  // which entity it represents. The override instruction makes clear that these
+  // images are the authoritative appearance source — the text prompt describes
+  // action and composition, NOT how characters or locations look.
+  const loadedEntities = conditioningEntities
+    .map((e, i) => ({ name: e.name, img: entityResults[i] ?? null }))
+    .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e.img !== null);
+
+  if (loadedEntities.length > 0) {
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the authoritative appearance for each character and location. Reproduce their exact faces, features, clothing, colours, and visual identity in the output. The text prompt describes what is happening and the composition — it does NOT override the appearance shown here. Do NOT adopt the photographic style of the reference images; apply only the style from the text prompt.]' });
+    for (const { name, img } of loadedEntities) {
+      parts.push({ text: `[Reference — ${name}:]` });
+      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
+    }
   }
-  parts.push(
-    ...conditioningImages.map((img) => ({
-      inlineData: { data: img.data, mimeType: img.mimeType },
-    })),
-  );
 
   // Tell the model what the first image is when a prev frame is present.
   const fullPrompt = prevFrameResult
@@ -205,6 +205,12 @@ export async function POST(
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
 
+  // Build entity name lookup for labelled conditioning
+  const entityNames: Record<string, string> = {};
+  for (const c of parsed.characters) entityNames[c.id] = c.name;
+  for (const l of parsed.locations) entityNames[l.id] = l.name;
+  for (const p of parsed.props) entityNames[p.id] = p.name;
+
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
   const runId = Date.now();
@@ -265,11 +271,14 @@ export async function POST(
                   ...shot.continuity.props_persisting,
                   ...shot.continuity.props_introduced,
                 ];
-                const conditioningUrls = entityIds
-                  .map((entityId) => selectedRefUrl(entityId))
-                  .filter((url): url is string => url !== null);
+                const conditioningEntities = entityIds
+                  .map((entityId) => {
+                    const url = selectedRefUrl(entityId);
+                    return url ? { name: entityNames[entityId] ?? entityId, url } : null;
+                  })
+                  .filter((e): e is { name: string; url: string } => e !== null);
 
-                const img = await generateOneShot(ai, model, prompt, conditioningUrls, prevShotUrl);
+                const img = await generateOneShot(ai, model, prompt, conditioningEntities, prevShotUrl);
 
                 if (!img) {
                   const durationMs = Date.now() - shotStart;
