@@ -112,8 +112,6 @@ const VALID_FIXTURE: ParsedStoryboard = {
         ambient: 'Quiet domestic interior, faint fridge hum',
         music: null,
       },
-      duration: { veo: 6, kling: 5 },
-      chain_instruction: null,
       key_frame_prompt:
         'Wide shot, eye-level, static, 35mm lens at f/8, deep focus. A long galley kitchen — sink and window on left wall, oak island down centre, archway at far end, cream walls, brass fittings. Hard afternoon sunlight from camera-left window raking across the oak surface, deep shadow on opposite walls, faint dust in the light beam. Empty room. Kodak Vision3 500T grain, restrained palette, Roger Deakins architectural composition.',
     },
@@ -149,8 +147,6 @@ const VALID_FIXTURE: ParsedStoryboard = {
         ambient: 'Quiet domestic interior',
         music: null,
       },
-      duration: { veo: 8, kling: 10 },
-      chain_instruction: 'CHAIN: end-frame-of-01 → start-frame-of-02 (continuous time, same lighting)',
       key_frame_prompt:
         'Medium shot, eye-level, static, 35mm at f/2.8, shallow depth. Maya, 34, Black woman with shoulder-length tightly curled black hair, faint scar above right eyebrow, wearing faded blue surgeon scrubs and a thin gold chain — standing at an oak island in a long galley kitchen, hands flat on the surface. Hard afternoon sun from camera-left raking across the island. Kodak Vision3 500T grain, restrained palette, Roger Deakins.',
     },
@@ -209,20 +205,6 @@ test('valid storyboard parses cleanly', () => {
 test('rejects invalid character ID format', () => {
   const broken = JSON.parse(JSON.stringify(VALID_FIXTURE));
   broken.characters[0].id = 'char-maya'; // lowercase, no prefix
-  const result = ParsedStoryboardSchema.safeParse(broken);
-  assertEq(result.success, false, 'expected validation failure');
-});
-
-test('rejects veo duration outside [4, 6, 8]', () => {
-  const broken = JSON.parse(JSON.stringify(VALID_FIXTURE));
-  broken.shots[0].duration.veo = 5; // 5 is valid for Kling, not Veo
-  const result = ParsedStoryboardSchema.safeParse(broken);
-  assertEq(result.success, false, 'expected validation failure');
-});
-
-test('rejects kling duration outside [5, 10]', () => {
-  const broken = JSON.parse(JSON.stringify(VALID_FIXTURE));
-  broken.shots[0].duration.kling = 7;
   const result = ParsedStoryboardSchema.safeParse(broken);
   assertEq(result.success, false, 'expected validation failure');
 });
@@ -293,7 +275,7 @@ test('shot has key_frame_prompt populated', () => {
 console.log();
 console.log(c.bold(`Result:`));
 if (failed === 0) {
-  console.log(c.green(`  ✔ ${passed}/${passed + failed} tests passed`));
+  console.log(c.green(`  ✔ ${passed}/${passed + failed} tests passed`)); // expect 10
   process.exit(0);
 } else {
   console.log(c.red(`  ✖ ${failed} of ${passed + failed} tests failed`));

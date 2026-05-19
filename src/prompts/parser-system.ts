@@ -34,8 +34,8 @@ The markdown follows a fixed structure:
        ### Props — fenced blocks, one per PROP-* entity
   6. ## Shot list summary — a single markdown table (skip; redundant with shots)
   7. ## Per-shot blocks — one ### Shot NN heading per shot, each with:
-       Function / Grammar / Continuity / Action / Dialogue / Sound / Duration
-       / Chain instruction / #### Veo 3.1 prompt / #### Kling 2.5 prompt
+       Function / Grammar / Continuity / Action / Dialogue / Sound
+       / #### Key frame prompt
   8. ## Followability audit — withholdings, rhymes, flags
 
 Trust the structure. Don't try to interpret unusual markdown — if the doc
@@ -54,12 +54,6 @@ rest empty.
     Bible block, preserving the specific wording. You can lightly reformat
     multi-line field values into flowing prose if needed for the prompt
     injection use case, but every visual detail must survive.
-
-**Do NOT extract Veo or Kling prompts.**
-
-The source markdown contains "#### Veo 3.1 prompt" and "#### Kling 2.5 prompt"
-sections per shot. **Ignore them completely.** Do not copy them into any field.
-The schema has no veo_prompt or kling_prompt fields.
 
 **Derived fields you must construct:**
 
@@ -91,30 +85,17 @@ These are not copied verbatim — you generate them from the source content:
 
   - key_frame_prompt (on each Shot)
 
-    This is the PRIMARY image generation prompt for the shot. Construct it
-    from the shot's Grammar, Continuity, and Action/beat fields — NOT from
-    the Veo or Kling prompt blocks (which you are ignoring).
+    Extract verbatim from the "#### Key frame prompt" section of the shot
+    block. This is a still-image prompt already written by the storyboard
+    skill — copy it exactly, preserving every word. Do not paraphrase,
+    summarise, or rewrite it.
 
-    Include:
-      - Composition (scale, angle, lens from grammar)
-      - Subject: the character(s) in the shot, using their Bible description
-        verbatim (full visual details — face, hair, build, wardrobe)
-      - Environment: the location, using its Bible description verbatim
-        (geography, palette, lighting, textures)
-      - The central action beat — the dramatically central MOMENT this shot
-        is built around (for a push-in, the closest-to-subject end frame;
-        for a reveal, the reveal moment; for a held look, the locked moment)
-      - Lighting from continuity (direction, quality, time of day)
-      - Style lock (look, lens, colour grade — abbreviated form)
-
-    Exclude:
-      - Audio (no SFX, no dialogue, no music)
-      - Motion over time ("tracks from...", "dollies in over the duration")
-      - Temporal language ("first 2 seconds...", "halfway through...")
-
-    The result is a paragraph-form still-image prompt of ~80-150 words that
-    Gemini Nano Banana can generate as the shot's key frame, alongside
-    character/location/prop reference stills as conditioning images.
+    If the source markdown is an older format that has "#### Veo 3.1 prompt"
+    and "#### Kling 2.5 prompt" sections but no "#### Key frame prompt"
+    section, construct the key_frame_prompt yourself from the shot's Grammar,
+    Continuity, and Action/beat fields (subject with Bible descriptions
+    verbatim, environment, lighting, composition, style lock — no audio,
+    no motion over time, no temporal language, ~80-150 words).
 
 **Field-level rules:**
 
@@ -127,9 +108,6 @@ These are not copied verbatim — you generate them from the source content:
     (CHAR-*, PROP-*). Verify each ID matches an entity in the Bible.
     If a shot references an entity not in the Bible, that's a parser
     miss — re-check the source.
-  - duration.veo must be 4, 6, or 8. duration.kling must be 5 or 10.
-    If the source has values outside these ranges, round to the nearest
-    valid value and continue.
   - If the source markdown deviates from the standard shot block format
     (e.g., uses compact mode), still extract the same fields. Compact
     mode tightens prose but preserves the prompts and grammar metadata.

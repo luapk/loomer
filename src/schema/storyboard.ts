@@ -236,27 +236,6 @@ export const ShotSoundDesignSchema = z.object({
   music: z.string().nullable().describe('Music notes (usually null — score is post).'),
 });
 
-// veo/kling durations are deferred — only needed at video generation time,
-// not for stills. Optional to keep parse lean and avoid validation failures.
-export const ShotDurationSchema = z.object({
-  veo: z
-    .number()
-    .int()
-    .refine((n) => [4, 6, 8].includes(n), {
-      message: 'Veo 3.1 supports 4, 6, or 8 second clips.',
-    })
-    .optional()
-    .describe('Veo clip duration: 4, 6, or 8 seconds. Populated at video generation time.'),
-  kling: z
-    .number()
-    .int()
-    .refine((n) => [5, 10].includes(n), {
-      message: 'Kling supports 5 or 10 second clips.',
-    })
-    .optional()
-    .describe('Kling clip duration: 5 or 10 seconds. Populated at video generation time.'),
-});
-
 export const ShotSchema = z.object({
   shot_number: z.number().int().positive().describe('Sequence number, starting at 1.'),
   descriptor: z.string().describe('Short label. e.g. "Establishing the world"'),
@@ -280,19 +259,10 @@ export const ShotSchema = z.object({
 
   sound_design: ShotSoundDesignSchema,
 
-  duration: ShotDurationSchema.optional(),
-
-  chain_instruction: z
-    .string()
-    .nullable()
-    .describe(
-      'Chain instruction if any — e.g. "CHAIN: end-frame-of-04 → start-frame-of-05". null if standalone.',
-    ),
-
   key_frame_prompt: z
     .string()
     .describe(
-      'A still-image prompt for Gemini Nano Banana: composition, subject (Bible descriptions verbatim), environment, lighting, style lock — no audio, no motion verbs, no temporal language. ~80-150 words. This is the primary image generation prompt for the shot key frame, sent alongside character/location/prop reference stills as conditioning.',
+      'A still-image prompt for Gemini image generation: composition, subject (Bible descriptions verbatim), environment, lighting, style lock — no audio, no motion verbs, no temporal language. ~80-150 words. Extract verbatim from the "#### Key frame prompt" section of the shot block.',
     ),
 });
 
