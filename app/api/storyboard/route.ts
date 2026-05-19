@@ -93,12 +93,12 @@ export async function POST(request: NextRequest) {
       send({ type: 'init', id: storyboard.id });
 
       try {
-        // Use the prompt-caching beta so the 105KB skill system prompt is cached
+        // Use the prompt-caching beta so the ~97KB skill system prompt is cached
         // server-side. Cache TTL is 5 minutes — subsequent requests skip re-encoding
         // that prompt, cutting ~30% off time-to-first-token.
         const messageStream = client.beta.promptCaching.messages.stream({
           model: MODEL,
-          max_tokens: 20000,
+          max_tokens: 16000,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: script }],
         });
