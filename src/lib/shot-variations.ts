@@ -19,9 +19,10 @@ export const SHOT_VARIATION_GROUPS: VariationGroup[] = [
       { id: 'wider', label: 'Wider', prompt: 'Pull back — wider framing revealing more environment, subject smaller.' },
       { id: 'insert', label: 'Insert / CU', prompt: 'Extreme close-up insert — isolate a specific detail or object within the scene.' },
       { id: 'xcu', label: 'Extreme Close Up', prompt: 'Extreme close-up on face — eyes, hands, or mouth filling the entire frame. Maximum intimacy and psychological intensity.' },
-      { id: 'ots', label: 'Over-the-shoulder', prompt: 'Over-the-shoulder composition — figure in foreground partially occluding, subject beyond.' },
-      { id: 'dirty_single', label: 'Dirty single', prompt: 'Dirty single — tight single on one character with another character\'s shoulder or head soft in the extreme foreground, blurred out of focus, giving depth and relational context without cutting away.' },
-      { id: 'pov_fisheye', label: 'POV / Fisheye', prompt: 'First-person POV with extreme fisheye lens — barrel-distorted wide-angle perspective warping the scene edges, immersive and disorienting, as if seen through a peephole or action-camera.' },
+      { id: 'ots', label: 'Over-the-shoulder', prompt: 'Over-the-shoulder composition — figure A in partial foreground (back of head/shoulder visible, slightly soft), figure B beyond as the in-focus subject. Maintain correct screen-side positions from the shot description.' },
+      { id: 'dirty_single', label: 'Dirty single', prompt: 'Dirty single — tight single on the primary subject in sharp focus, secondary character\'s shoulder or side of head entering the extreme foreground as a soft out-of-focus blur, giving relational depth without cutting away. Refer to the shot description to determine who is primary and who is the foreground presence.' },
+      { id: 'pov', label: 'POV', prompt: 'Strict first-person point-of-view — the camera IS one character\'s eyes. We see exactly what they see from their optical position. No face is visible; only body parts (hands, arms) may enter frame naturally. Normal lens geometry — no distortion.' },
+      { id: 'fisheye', label: 'Fisheye', prompt: 'Extreme fisheye lens — barrel-distorted ultra-wide-angle with severe curved distortion at the frame edges, immersive and disorienting. External camera position (not POV), distorted perspective warping the whole scene.' },
     ],
   },
   {

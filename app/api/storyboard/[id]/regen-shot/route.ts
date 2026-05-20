@@ -95,7 +95,7 @@ async function generateOneShot(
   parts.push({ text: styleDeclaration });
 
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define the exact visual appearance of each entity. The image IS the ground truth — its colours, materials, textures and design details are AUTHORITATIVE and override any conflicting appearance descriptions in the prompt text (e.g. if the prompt says "blue button" but the reference shows a yellow button, render it yellow). Extract identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the SOLE visual specification for each entity. DISREGARD any colour, material, or appearance adjective used to describe these entities in the prompt text — those reflect the original brief and may be outdated. The reference image is always correct. If the prompt says "blue button" but the reference shows a yellow button, render it yellow. Extract identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
       // Strip appearance descriptor (everything after " — ") from the label so the
       // label text does not contradict the reference image.
@@ -194,23 +194,38 @@ export async function POST(
     return NextResponse.json({ error: `Shot ${shotNumber} not found in storyboard` }, { status: 404 });
   }
 
+  // Build entity name lookup early — needed for character-context injection below.
+  const entityNames: Record<string, string> = {};
+  for (const c of parsed.characters) entityNames[c.id] = c.name;
+  for (const l of parsed.locations) entityNames[l.id] = l.name;
+  for (const p of parsed.props) entityNames[p.id] = p.name;
+
   // Build prompt — use override text if provided, otherwise the storyboard key frame prompt.
   // Style prefix always comes first; Director's note variations are appended regardless.
   const keyFrameText = overridePrompt?.trim() ? overridePrompt.trim() : shot.key_frame_prompt;
   let prompt = buildShotPrompt(keyFrameText, renderStyle, parsed.style_lock);
   if (variations.length > 0) {
-    prompt += `\n\nDirector's note: ${variations.join(' ')}`;
+    // For OTS / dirty-single variations, inject the shot's character names so the model
+    // knows which character to blur vs keep in focus.
+    const shotCharacterNames = shot.continuity.characters
+      .map((charId: string) => entityNames[charId])
+      .filter((n): n is string => Boolean(n));
+    const enhancedVariations = variations.map((v) => {
+      if (
+        shotCharacterNames.length >= 2 &&
+        (v.includes('dirty single') || v.includes('Over-the-shoulder'))
+      ) {
+        return `${v} Characters in this shot: ${shotCharacterNames.join(', ')}. The shot description identifies who is primary (in focus) and who is the blurred foreground presence.`;
+      }
+      return v;
+    });
+    prompt += `\n\nDirector's note: ${enhancedVariations.join(' ')}`;
   }
 
-  // Build entity name lookup and collect named conditioning refs.
+  // Collect named conditioning refs.
   const refStills = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
-
-  const entityNames: Record<string, string> = {};
-  for (const c of parsed.characters) entityNames[c.id] = c.name;
-  for (const l of parsed.locations) entityNames[l.id] = l.name;
-  for (const p of parsed.props) entityNames[p.id] = p.name;
 
   const continuityIds = new Set<string>([
     ...shot.continuity.characters,

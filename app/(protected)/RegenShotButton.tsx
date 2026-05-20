@@ -10,16 +10,22 @@ const MAX_SELECTED = 3;
 interface Props {
   storyboardId: string;
   shotNumber: number;
+  keyFramePrompt?: string;
   onSuccess: (url: string) => void;
 }
 
-export function RegenShotButton({ storyboardId, shotNumber, onSuccess }: Props) {
+export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSuccess }: Props) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [overridePrompt, setOverridePrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Pre-populate the prompt textarea with the current shot prompt each time the popover opens.
+  useEffect(() => {
+    if (open) setOverridePrompt(keyFramePrompt ?? '');
+  }, [open, keyFramePrompt]);
 
   // Close popover on outside click
   useEffect(() => {
@@ -112,13 +118,13 @@ export function RegenShotButton({ storyboardId, shotNumber, onSuccess }: Props) 
 
           <div className="p-3 space-y-3 max-h-80 overflow-y-auto">
             <div>
-              <p className="text-xs font-medium text-stone-500 mb-1.5">Custom prompt</p>
+              <p className="text-xs font-medium text-stone-500 mb-1.5">Edit prompt</p>
               <textarea
-                rows={3}
+                rows={4}
                 value={overridePrompt}
                 onChange={(e) => setOverridePrompt(e.target.value)}
-                placeholder="Override the original shot description… (leave blank to use original)"
-                className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+                placeholder="Describe the shot…"
+                className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-y focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
               />
             </div>
             {SHOT_VARIATION_GROUPS.map((group) => (

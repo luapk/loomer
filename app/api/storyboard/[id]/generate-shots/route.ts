@@ -149,7 +149,7 @@ async function generateOneShot(
     .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e.img !== null);
 
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define the exact visual appearance of each entity. The image IS the ground truth — its colours, materials, textures and design details are AUTHORITATIVE and override any conflicting appearance descriptions in the prompt text (e.g. if the prompt says "blue button" but the reference shows a yellow button, render it yellow). Extract identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the SOLE visual specification for each entity. DISREGARD any colour, material, or appearance adjective used to describe these entities in the prompt text — those reflect the original brief and may be outdated. The reference image is always correct. If the prompt says "blue button" but the reference shows a yellow button, render it yellow. Extract identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
       // Strip appearance descriptor (everything after " — ") from the label so the
       // label text does not contradict the reference image (e.g. "Speech button —

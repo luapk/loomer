@@ -132,6 +132,10 @@ function HomePageInner() {
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
 
+  // VO line editing — shotNumber of the shot currently being edited, plus draft text
+  const [editingVoShot, setEditingVoShot] = useState<number | null>(null);
+  const [voEditText, setVoEditText] = useState('');
+
   const [activeTab, setActiveTab] = useState<Tab>('storyboard');
 
   const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
@@ -1310,6 +1314,7 @@ function HomePageInner() {
                       <RegenShotButton
                         storyboardId={state.id}
                         shotNumber={shot.shot_number as number}
+                        keyFramePrompt={shot.key_frame_prompt as string | undefined}
                         onSuccess={(url) => {
                           setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'done', url } }));
                           // Clear any continuity issues for this shot since it was regenerated
@@ -1392,8 +1397,68 @@ function HomePageInner() {
                     <span className="text-stone-200">·</span>
                     <span className="text-xs text-stone-400">Veo {shot.duration?.veo as number}s</span>
                   </div>
-                  {shot.dialogue_vo && (
-                    <p className="text-xs text-stone-600 italic pl-8 leading-snug">"{shot.dialogue_vo as string}"</p>
+                  {(shot.dialogue_vo || editingVoShot === (shot.shot_number as number)) && (
+                    <div className="pl-8 group/vo flex items-start gap-1.5">
+                      {editingVoShot === (shot.shot_number as number) ? (
+                        <>
+                          <textarea
+                            autoFocus
+                            rows={2}
+                            value={voEditText}
+                            onChange={(e) => setVoEditText(e.target.value)}
+                            className="flex-1 text-xs rounded border border-stone-300 bg-white px-2 py-1 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800"
+                          />
+                          <div className="flex flex-col gap-1 flex-shrink-0 pt-0.5">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!('id' in state)) return;
+                                const sn = shot.shot_number as number;
+                                await fetch(`/api/storyboard/${state.id}/patch-shot`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ shotNumber: sn, dialogue_vo: voEditText }),
+                                });
+                                setState((prev) => {
+                                  if (!('parsedJson' in prev)) return prev;
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  const updatedShots = (prev.parsedJson as any).shots.map((s: any) =>
+                                    s.shot_number === sn ? { ...s, dialogue_vo: voEditText || undefined } : s
+                                  );
+                                  return { ...prev, parsedJson: { ...(prev.parsedJson as object), shots: updatedShots } };
+                                });
+                                setEditingVoShot(null);
+                              }}
+                              className="text-xs px-1.5 py-0.5 rounded bg-stone-900 text-white hover:bg-stone-700 transition-colors"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingVoShot(null)}
+                              className="text-xs px-1.5 py-0.5 rounded border border-stone-200 text-stone-500 hover:text-stone-900 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="flex-1 text-xs text-stone-600 italic leading-snug">"{shot.dialogue_vo as string}"</p>
+                          <button
+                            type="button"
+                            title="Edit VO / dialogue"
+                            onClick={() => {
+                              setVoEditText((shot.dialogue_vo as string) ?? '');
+                              setEditingVoShot(shot.shot_number as number);
+                            }}
+                            className="opacity-0 group-hover/vo:opacity-100 transition-opacity flex-shrink-0 mt-0.5 p-0.5 rounded hover:bg-stone-100"
+                          >
+                            <Pencil className="h-3 w-3 text-stone-400" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
