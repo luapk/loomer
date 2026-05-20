@@ -95,7 +95,7 @@ async function generateOneShot(
   parts.push({ text: styleDeclaration });
 
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define who and what the subjects are — faces, features, clothing, colours. Extract their identity and render it in the OUTPUT STYLE declared above. Do NOT copy the photographic or artistic medium of these references — translate their appearance into the declared output style.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define the exact visual appearance of each entity. Their colours, materials, textures, and design details are AUTHORITATIVE — they override any conflicting appearance descriptions in the prompt text. If the prompt says "blue button" but the reference shows a yellow button, render it yellow. Extract their identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
       parts.push({ text: `[Reference — ${name}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
@@ -141,6 +141,7 @@ async function generateOneShot(
 interface RegenShotBody {
   shotNumber: number;
   variations: string[];
+  overridePrompt?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +161,7 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { shotNumber, variations } = body;
+  const { shotNumber, variations, overridePrompt } = body;
   if (typeof shotNumber !== 'number' || !Number.isInteger(shotNumber)) {
     return NextResponse.json({ error: 'shotNumber must be an integer' }, { status: 400 });
   }
@@ -190,8 +191,10 @@ export async function POST(
     return NextResponse.json({ error: `Shot ${shotNumber} not found in storyboard` }, { status: 404 });
   }
 
-  // Build prompt — style prefix first, then optional Director's note.
-  let prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock);
+  // Build prompt — use override text if provided, otherwise the storyboard key frame prompt.
+  // Style prefix always comes first; Director's note variations are appended regardless.
+  const keyFrameText = overridePrompt?.trim() ? overridePrompt.trim() : shot.key_frame_prompt;
+  let prompt = buildShotPrompt(keyFrameText, renderStyle, parsed.style_lock);
   if (variations.length > 0) {
     prompt += `\n\nDirector's note: ${variations.join(' ')}`;
   }
@@ -206,18 +209,28 @@ export async function POST(
   for (const l of parsed.locations) entityNames[l.id] = l.name;
   for (const p of parsed.props) entityNames[p.id] = p.name;
 
-  const entityIds: string[] = [
+  const continuityIds = new Set<string>([
     ...shot.continuity.characters,
     shot.continuity.location_id,
     ...shot.continuity.props_persisting,
     ...shot.continuity.props_introduced,
-  ];
-  const conditioningEntities = entityIds
+  ]);
+  const primaryEntities = [...continuityIds]
     .map((entityId) => {
       const url = selectedRefUrl(entityId);
       return url ? { name: entityNames[entityId] ?? entityId, url } : null;
     })
     .filter((e): e is { name: string; url: string } => e !== null);
+
+  const secondaryEntities = parsed.props
+    .filter((p) => !continuityIds.has(p.id))
+    .map((p) => {
+      const url = selectedRefUrl(p.id);
+      return url ? { name: p.name, url } : null;
+    })
+    .filter((e): e is { name: string; url: string } => e !== null);
+
+  const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
   const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
   const ai = new GoogleGenAI({ apiKey });

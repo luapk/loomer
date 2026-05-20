@@ -16,6 +16,7 @@ interface Props {
 export function RegenShotButton({ storyboardId, shotNumber, onSuccess }: Props) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const [overridePrompt, setOverridePrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -48,7 +49,11 @@ export function RegenShotButton({ storyboardId, shotNumber, onSuccess }: Props) 
       const res = await fetch(`/api/storyboard/${storyboardId}/regen-shot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shotNumber, variations: variationPrompts }),
+        body: JSON.stringify({
+          shotNumber,
+          variations: variationPrompts,
+          overridePrompt: overridePrompt.trim() || undefined,
+        }),
       });
       if (!res.ok) {
         const data = (await res.json()) as { error?: string };
@@ -57,6 +62,7 @@ export function RegenShotButton({ storyboardId, shotNumber, onSuccess }: Props) 
       }
       const data = (await res.json()) as { url: string };
       setSelected([]);
+      setOverridePrompt('');
       onSuccess(data.url);
     } catch {
       setError('Network error — please try again');
@@ -105,6 +111,16 @@ export function RegenShotButton({ storyboardId, shotNumber, onSuccess }: Props) 
           </div>
 
           <div className="p-3 space-y-3 max-h-80 overflow-y-auto">
+            <div>
+              <p className="text-xs font-medium text-stone-500 mb-1.5">Custom prompt</p>
+              <textarea
+                rows={3}
+                value={overridePrompt}
+                onChange={(e) => setOverridePrompt(e.target.value)}
+                placeholder="Override the original shot description… (leave blank to use original)"
+                className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+              />
+            </div>
             {SHOT_VARIATION_GROUPS.map((group) => (
               <div key={group.id}>
                 <p className="text-xs font-medium text-stone-500 mb-1.5">{group.label}</p>

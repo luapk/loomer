@@ -149,7 +149,7 @@ async function generateOneShot(
     .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e.img !== null);
 
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define who and what the subjects are — faces, features, clothing, colours. Extract their identity and render it in the OUTPUT STYLE declared above. Do NOT copy the photographic or artistic medium of these references — translate their appearance into the declared output style.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define the exact visual appearance of each entity. Their colours, materials, textures, and design details are AUTHORITATIVE — they override any conflicting appearance descriptions in the prompt text. If the prompt says "blue button" but the reference shows a yellow button, render it yellow. Extract their identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
       parts.push({ text: `[Reference — ${name}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
@@ -284,18 +284,33 @@ export async function POST(
                 const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock);
                 const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
 
-                const entityIds: string[] = [
+                // Primary: entities explicitly in this shot's continuity.
+                const continuityIds = new Set<string>([
                   ...shot.continuity.characters,
                   shot.continuity.location_id,
                   ...shot.continuity.props_persisting,
                   ...shot.continuity.props_introduced,
-                ];
-                const conditioningEntities = entityIds
+                ]);
+                const primaryEntities = [...continuityIds]
                   .map((entityId) => {
                     const url = selectedRefUrl(entityId);
                     return url ? { name: entityNames[entityId] ?? entityId, url } : null;
                   })
                   .filter((e): e is { name: string; url: string } => e !== null);
+
+                // Secondary: props with an approved ref that aren't in this shot's
+                // explicit continuity (packshots, hero products, always-present items).
+                // Props are safe to add globally — unlike characters, the model won't
+                // spontaneously insert a product into a frame it doesn't belong in.
+                const secondaryEntities = parsed.props
+                  .filter((p) => !continuityIds.has(p.id))
+                  .map((p) => {
+                    const url = selectedRefUrl(p.id);
+                    return url ? { name: p.name, url } : null;
+                  })
+                  .filter((e): e is { name: string; url: string } => e !== null);
+
+                const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
                 const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevShotUrl);
 
