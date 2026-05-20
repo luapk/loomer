@@ -1,33 +1,50 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { RefreshCw, Loader2 } from 'lucide-react';
+import { RefreshCw, Loader2, X } from 'lucide-react';
 import { Button } from '@/src/components/ui/button';
 import { SHOT_VARIATION_GROUPS } from '@/src/lib/shot-variations';
 
 const MAX_SELECTED = 3;
 
+interface EntityInfo {
+  id: string;
+  name: string;
+}
+
 interface Props {
   storyboardId: string;
   shotNumber: number;
   keyFramePrompt?: string;
+  conditioningEntities?: EntityInfo[];
   onSuccess: (url: string) => void;
 }
 
-export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSuccess }: Props) {
+export function RegenShotButton({
+  storyboardId,
+  shotNumber,
+  keyFramePrompt,
+  conditioningEntities = [],
+  onSuccess,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [overridePrompt, setOverridePrompt] = useState('');
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Pre-populate the prompt textarea with the current shot prompt each time the popover opens.
+  // Reset and pre-populate when popover opens
   useEffect(() => {
-    if (open) setOverridePrompt(keyFramePrompt ?? '');
+    if (open) {
+      setOverridePrompt(keyFramePrompt ?? '');
+      setExcludedIds(new Set());
+      setSelected([]);
+    }
   }, [open, keyFramePrompt]);
 
-  // Close popover on outside click
+  // Close on outside click
   useEffect(() => {
     if (!open) return;
     function handleClick(e: MouseEvent) {
@@ -47,6 +64,14 @@ export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSu
     });
   }
 
+  function toggleExclude(id: string) {
+    setExcludedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
   async function regen(variationPrompts: string[]) {
     setOpen(false);
     setLoading(true);
@@ -59,6 +84,7 @@ export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSu
           shotNumber,
           variations: variationPrompts,
           overridePrompt: overridePrompt.trim() || undefined,
+          excludedEntityIds: excludedIds.size > 0 ? [...excludedIds] : undefined,
         }),
       });
       if (!res.ok) {
@@ -67,8 +93,6 @@ export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSu
         return;
       }
       const data = (await res.json()) as { url: string };
-      setSelected([]);
-      setOverridePrompt('');
       onSuccess(data.url);
     } catch {
       setError('Network error — please try again');
@@ -77,19 +101,24 @@ export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSu
     }
   }
 
+  // Live director's note preview — shown when variations are selected so the
+  // user can see what will be appended to their prompt before triggering regen.
+  const directorNotePreview = selected.length > 0
+    ? selected.map((p) => {
+        // Show first clause of the variation prompt (up to ' — ' or 60 chars)
+        const dash = p.indexOf(' — ');
+        return dash > 0 ? p.slice(0, dash) : p.slice(0, 60) + (p.length > 60 ? '…' : '');
+      }).join(' + ')
+    : null;
+
   return (
     <div ref={containerRef} className="relative">
-      {/* Trigger button */}
+      {/* Trigger */}
       <button
         type="button"
         aria-label="Regenerate shot"
         disabled={loading}
-        onClick={() => {
-          if (!loading) {
-            setOpen((v) => !v);
-            setError(null);
-          }
-        }}
+        onClick={() => { if (!loading) { setOpen((v) => !v); setError(null); } }}
         className="h-7 w-7 p-0 flex items-center justify-center rounded-full bg-white/80 shadow-sm hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {loading ? (
@@ -99,26 +128,25 @@ export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSu
         )}
       </button>
 
-      {/* Inline error display */}
+      {/* Inline error */}
       {error && !open && (
         <div className="absolute right-0 top-8 z-50 w-56 rounded-lg bg-red-50 border border-red-200 p-2 text-xs text-red-700 shadow-md">
           {error}
         </div>
       )}
 
-      {/* Popover panel */}
+      {/* Popover */}
       {open && (
-        <div className="absolute right-0 top-8 z-50 w-72 rounded-xl border border-stone-200 bg-white shadow-xl">
+        <div className="absolute right-0 top-8 z-50 w-80 rounded-xl border border-stone-200 bg-white shadow-xl">
           <div className="p-3 border-b border-stone-100">
             <p className="text-xs font-semibold text-stone-900">Regenerate shot</p>
-            <p className="text-xs text-stone-400 mt-0.5">
-              Pick up to {MAX_SELECTED} variations, or just retry.
-            </p>
+            <p className="text-xs text-stone-400 mt-0.5">Edit the prompt, pick variations, or just retry.</p>
           </div>
 
-          <div className="p-3 space-y-3 max-h-80 overflow-y-auto">
+          <div className="p-3 space-y-3 max-h-96 overflow-y-auto">
+            {/* Editable prompt */}
             <div>
-              <p className="text-xs font-medium text-stone-500 mb-1.5">Edit prompt</p>
+              <p className="text-xs font-medium text-stone-500 mb-1.5">Prompt</p>
               <textarea
                 rows={4}
                 value={overridePrompt}
@@ -127,6 +155,8 @@ export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSu
                 className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-y focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
               />
             </div>
+
+            {/* Variation chips */}
             {SHOT_VARIATION_GROUPS.map((group) => (
               <div key={group.id}>
                 <p className="text-xs font-medium text-stone-500 mb-1.5">{group.label}</p>
@@ -155,13 +185,51 @@ export function RegenShotButton({ storyboardId, shotNumber, keyFramePrompt, onSu
                 </div>
               </div>
             ))}
+
+            {/* Live Director's note preview */}
+            {directorNotePreview && (
+              <div className="rounded-md bg-stone-50 border border-stone-100 px-2.5 py-2">
+                <p className="text-xs text-stone-400 mb-0.5 font-medium">Director&apos;s note (will append)</p>
+                <p className="text-xs text-stone-600 italic">{directorNotePreview}</p>
+              </div>
+            )}
+
+            {/* Exclude entities from conditioning */}
+            {conditioningEntities.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-stone-500 mb-1.5">Remove from this frame</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {conditioningEntities.map((e) => {
+                    const isExcluded = excludedIds.has(e.id);
+                    return (
+                      <button
+                        key={e.id}
+                        type="button"
+                        onClick={() => toggleExclude(e.id)}
+                        title={isExcluded ? `Re-include ${e.name}` : `Exclude ${e.name} from conditioning`}
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                          isExcluded
+                            ? 'bg-red-50 text-red-600 border-red-200 line-through'
+                            : 'bg-white text-stone-600 border-stone-200 hover:border-red-300 hover:text-red-600'
+                        }`}
+                      >
+                        {isExcluded && <X className="h-2.5 w-2.5 flex-shrink-0" />}
+                        {e.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                {excludedIds.size > 0 && (
+                  <p className="text-xs text-stone-400 mt-1.5">Excluded entities won&apos;t be used as visual references for this frame.</p>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="p-3 border-t border-stone-100 flex items-center gap-2">
             <Button
               size="sm"
               className="flex-1"
-              disabled={selected.length === 0}
               onClick={() => { void regen(selected); }}
             >
               Regenerate

@@ -145,6 +145,7 @@ interface RegenShotBody {
   shotNumber: number;
   variations: string[];
   overridePrompt?: string;
+  excludedEntityIds?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +165,7 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { shotNumber, variations, overridePrompt } = body;
+  const { shotNumber, variations, overridePrompt, excludedEntityIds } = body;
   if (typeof shotNumber !== 'number' || !Number.isInteger(shotNumber)) {
     return NextResponse.json({ error: 'shotNumber must be an integer' }, { status: 400 });
   }
@@ -233,7 +234,10 @@ export async function POST(
     ...shot.continuity.props_persisting,
     ...shot.continuity.props_introduced,
   ]);
+  const excluded = new Set(excludedEntityIds ?? []);
+
   const primaryEntities = [...continuityIds]
+    .filter((entityId) => !excluded.has(entityId))
     .map((entityId) => {
       const url = selectedRefUrl(entityId);
       return url ? { name: entityNames[entityId] ?? entityId, url } : null;
@@ -241,7 +245,7 @@ export async function POST(
     .filter((e): e is { name: string; url: string } => e !== null);
 
   const secondaryEntities = parsed.props
-    .filter((p) => !continuityIds.has(p.id))
+    .filter((p) => !continuityIds.has(p.id) && !excluded.has(p.id))
     .map((p) => {
       const url = selectedRefUrl(p.id);
       return url ? { name: p.name, url } : null;

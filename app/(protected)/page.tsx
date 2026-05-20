@@ -781,6 +781,28 @@ function HomePageInner() {
   const imagesComplete = totalEntities > 0 && approvedCount === totalEntities;
   const boardsComplete = state.phase === 'shots_done';
 
+  // Approved entities with stripped appearance labels — passed to RegenShotButton
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allParsedEntities: Array<{ id: string; name: string }> = isLoaded && 'parsedJson' in state
+    ? [
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...((state.parsedJson?.characters as any[]) ?? []).map((c: any) => ({
+          id: c.id as string,
+          name: ((c.name as string).split(/\s[—–]\s/)[0] ?? (c.name as string)).trim(),
+        })),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...((state.parsedJson?.locations as any[]) ?? []).map((l: any) => ({
+          id: l.id as string,
+          name: l.name as string,
+        })),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...((state.parsedJson?.props as any[]) ?? []).map((p: any) => ({
+          id: p.id as string,
+          name: ((p.name as string).split(/\s[—–]\s/)[0] ?? (p.name as string)).trim(),
+        })),
+      ]
+    : [];
+
   const tabDefs = [
     { id: 'storyboard' as Tab, label: 'Script Analysis', enabled: hasStoryboard, done: storyboardComplete },
     {
@@ -791,14 +813,14 @@ function HomePageInner() {
     },
     {
       id: 'images' as Tab,
-      label: totalEntities > 0 ? `Stills ${approvedCount}/${totalEntities}` : 'Stills',
+      label: totalEntities > 0 ? `Elements ${approvedCount}/${totalEntities}` : 'Elements',
       enabled: hasImages,
       spinner: state.phase === 'generating_refs',
       done: imagesComplete,
     },
     {
       id: 'boards' as Tab,
-      label: shotsTotal > 0 ? `Boards ${shotsDone}/${shotsTotal}` : 'Boards',
+      label: shotsTotal > 0 ? `Storyboard ${shotsDone}/${shotsTotal}` : 'Storyboard',
       enabled: hasBoards,
       spinner: shotsGenerating,
       done: boardsComplete,
@@ -888,7 +910,7 @@ function HomePageInner() {
       </div>
 
       {/* ── Settings panel — only when storyboard is loaded ── */}
-      {isLoaded && 'parsedJson' in state && (
+      {isLoaded && 'parsedJson' in state && (activeTab === 'images' || activeTab === 'boards') && (
         <div className="glass rounded-2xl p-6 space-y-5">
           <div>
             <h3 className="font-semibold text-stone-900 text-sm">Generation settings</h3>
@@ -1315,6 +1337,7 @@ function HomePageInner() {
                         storyboardId={state.id}
                         shotNumber={shot.shot_number as number}
                         keyFramePrompt={shot.key_frame_prompt as string | undefined}
+                        conditioningEntities={allParsedEntities.filter(e => Boolean(refStills[e.id]?.selected))}
                         onSuccess={(url) => {
                           setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'done', url } }));
                           // Clear any continuity issues for this shot since it was regenerated
@@ -1635,34 +1658,6 @@ function EntityCard({
           )}
         </div>
       </div>
-
-      {/* Fine-tune inline form */}
-      {fineTuneOpen && (
-        <div className="rounded-lg bg-stone-50 border border-stone-200 p-3 space-y-2">
-          <textarea
-            rows={2}
-            value={fineTuneNotes}
-            onChange={(e) => setFineTuneNotes(e.target.value)}
-            placeholder="e.g. make the jacket leather, shorter hair, add a beard…"
-            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
-            disabled={fineTuning}
-          />
-          {fineTuneError && (
-            <p className="text-xs text-red-600 flex items-center gap-1">
-              <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-              {fineTuneError}
-            </p>
-          )}
-          <button
-            onClick={() => void handleFineTune()}
-            disabled={fineTuning || !fineTuneNotes.trim()}
-            className="flex items-center gap-1.5 text-xs font-medium text-white bg-stone-800 rounded-md px-2.5 py-1.5 hover:bg-stone-900 transition-colors disabled:opacity-50"
-          >
-            {fineTuning ? <Loader2 className="h-3 w-3 animate-spin" /> : <Pencil className="h-3 w-3" />}
-            {fineTuning ? 'Regenerating…' : 'Regenerate with notes'}
-          </button>
-        </div>
-      )}
 
       {/* Fine-tune inline form */}
       {fineTuneOpen && (
