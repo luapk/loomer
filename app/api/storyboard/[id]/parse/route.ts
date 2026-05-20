@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 import { getDb } from '@/src/lib/db';
 import { parseStoryboard } from '@/src/pipeline/02-parse';
