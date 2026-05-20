@@ -95,9 +95,12 @@ async function generateOneShot(
   parts.push({ text: styleDeclaration });
 
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define the exact visual appearance of each entity. Their colours, materials, textures, and design details are AUTHORITATIVE — they override any conflicting appearance descriptions in the prompt text. If the prompt says "blue button" but the reference shows a yellow button, render it yellow. Extract their identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define the exact visual appearance of each entity. The image IS the ground truth — its colours, materials, textures and design details are AUTHORITATIVE and override any conflicting appearance descriptions in the prompt text (e.g. if the prompt says "blue button" but the reference shows a yellow button, render it yellow). Extract identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
-      parts.push({ text: `[Reference — ${name}:]` });
+      // Strip appearance descriptor (everything after " — ") from the label so the
+      // label text does not contradict the reference image.
+      const labelName = name.split(/\s[—–]\s/)[0]?.trim() ?? name;
+      parts.push({ text: `[Reference — ${labelName}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
     }
   }

@@ -20,6 +20,7 @@ export const SHOT_VARIATION_GROUPS: VariationGroup[] = [
       { id: 'insert', label: 'Insert / CU', prompt: 'Extreme close-up insert — isolate a specific detail or object within the scene.' },
       { id: 'xcu', label: 'Extreme Close Up', prompt: 'Extreme close-up on face — eyes, hands, or mouth filling the entire frame. Maximum intimacy and psychological intensity.' },
       { id: 'ots', label: 'Over-the-shoulder', prompt: 'Over-the-shoulder composition — figure in foreground partially occluding, subject beyond.' },
+      { id: 'dirty_single', label: 'Dirty single', prompt: 'Dirty single — tight single on one character with another character\'s shoulder or head soft in the extreme foreground, blurred out of focus, giving depth and relational context without cutting away.' },
       { id: 'pov_fisheye', label: 'POV / Fisheye', prompt: 'First-person POV with extreme fisheye lens — barrel-distorted wide-angle perspective warping the scene edges, immersive and disorienting, as if seen through a peephole or action-camera.' },
     ],
   },
