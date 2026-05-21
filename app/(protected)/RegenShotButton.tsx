@@ -137,7 +137,7 @@ export function RegenShotButton({
 
       {/* Popover */}
       {open && (
-        <div className="absolute right-0 top-8 z-50 w-80 rounded-xl border border-stone-200 bg-white shadow-xl flex flex-col max-h-[min(560px,calc(100vh-6rem))]">
+        <div className="absolute right-0 top-8 z-50 w-80 rounded-xl border border-stone-200 bg-white shadow-xl flex flex-col max-h-[min(560px,85vh)]">
           <div className="p-3 border-b border-stone-100 flex-shrink-0">
             <p className="text-xs font-semibold text-stone-900">Regenerate shot</p>
             <p className="text-xs text-stone-400 mt-0.5">Edit the prompt, pick variations, or just retry.</p>
