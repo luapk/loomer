@@ -118,6 +118,10 @@ async function generateOneShot(
   prompt: string,
   styleDeclaration: string,
   conditioningEntities: { name: string; url: string }[],
+  // prevFrameUrl is only used in WATERCOLOUR_SKETCH mode. In photoreal mode the
+  // output medium matches the prevFrame medium, so Gemini composites the content
+  // rather than reading it as a spatial reference. The style mismatch in
+  // watercolour mode acts as a natural barrier against this.
   prevFrameUrl: string | null,
 ): Promise<{ data: string; mimeType: string } | null> {
   const [prevFrameResult, ...entityResults] = await Promise.all([
@@ -132,21 +136,15 @@ async function generateOneShot(
   // the output medium before it sees photographic references.
   parts.push({ text: styleDeclaration });
 
-  // Spatial continuity reference — the immediately preceding shot in this scene.
-  // CRITICAL: the model must NOT reproduce any visual content from this image.
-  // It is used ONLY to read screen-side positions, eyeline directions, and room
-  // geography so those remain consistent across cuts. The scene change to a
-  // different location_id already guarantees this image is never passed across
-  // a location or temporal cut (flashback, period jump, etc.).
+  // Spatial continuity reference — only used in watercolour mode where the
+  // pencil-sketch output style is sufficiently different from a photographic
+  // prevFrame that Gemini reads positions without compositing content.
   if (prevFrameResult) {
     parts.push({ text: '[SPATIAL LAYOUT REFERENCE — DO NOT COPY CONTENT: The image below is the immediately preceding shot in this scene. DO NOT reproduce, embed, overlay, inset, or include ANY visual content from it in your output. DO NOT use it as a source of characters, objects, backgrounds, colours, or style. Read it ONLY for: (1) which screen-side each character occupies (left vs right of frame), (2) eyeline directions, (3) positions of major environmental elements. Your output image must contain ONLY what the following shot description specifies.]' });
     parts.push({ inlineData: { data: prevFrameResult.data, mimeType: prevFrameResult.mimeType } });
   }
 
-  // Named identity references. Each ref is labelled so the model knows which
-  // entity it represents. The model must extract identity (face, features,
-  // clothing) and render it in the declared output style — NOT copy the
-  // photographic medium of the reference.
+  // Named identity references.
   const loadedEntities = conditioningEntities
     .map((e, i) => ({ name: e.name, img: entityResults[i] ?? null }))
     .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e.img !== null);
@@ -154,9 +152,6 @@ async function generateOneShot(
   if (loadedEntities.length > 0) {
     parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the SOLE visual specification for each entity. DISREGARD any colour, material, or appearance adjective used to describe these entities in the prompt text — those reflect the original brief and may be outdated. The reference image is always correct. If the prompt says "blue button" but the reference shows a yellow button, render it yellow. Extract identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
-      // Strip appearance descriptor (everything after " — ") from the label so the
-      // label text does not contradict the reference image (e.g. "Speech button —
-      // mid-blue" → "Speech button" avoids the model anchoring on "mid-blue").
       const labelName = name.split(/\s[—–]\s/)[0]?.trim() ?? name;
       parts.push({ text: `[Reference — ${labelName}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
@@ -320,7 +315,11 @@ export async function POST(
 
                 const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
-                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevShotUrl);
+                // prevFrame spatial continuity is only safe in watercolour mode —
+                // in photoreal mode Gemini composites the image content rather than
+                // reading it as a spatial reference.
+                const prevFrameForShot = renderStyle === 'WATERCOLOUR_SKETCH' ? prevShotUrl : null;
+                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevFrameForShot);
 
                 if (!img) {
                   const durationMs = Date.now() - shotStart;
