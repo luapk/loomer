@@ -12,10 +12,15 @@ export const maxDuration = 800;
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
 
-// Guard appended to every reference still prompt to prevent Gemini from
-// producing split-panel or collage outputs when the prompt mentions multiple views.
-const SINGLE_IMAGE_GUARD =
-  'Single image only. One view, one moment, no panels, no collage, no split-screen, no before/after.';
+// Preamble prepended to every reference still prompt.
+// Establishes the output contract before the entity description so the model
+// doesn't drift into narrative storyboard mode.
+const REF_PREAMBLE =
+  'This is a CLEAN REFERENCE IMAGE for a single entity — a neutral-lit portrait or product shot with NO narrative context. ' +
+  'Single subject only, plain or simple background, single moment, single viewpoint. ' +
+  'DO NOT include: text overlays, captions, labels, scene descriptors, temporal markers ("present day", "1962"), ' +
+  'split panels, before/after panels, collages, multiple time periods, or multiple scenes. ' +
+  'The image must contain ONLY the entity described below and nothing else that tells a story.';
 
 function buildPrompt(
   entity: RefEntity,
@@ -24,14 +29,14 @@ function buildPrompt(
 ): string {
   const base = entity.reference_still_prompt;
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `Style: ${WATERCOLOUR_STYLE}\n\n${base}\n\n${SINGLE_IMAGE_GUARD}`;
+    return `${REF_PREAMBLE}\n\nStyle: ${WATERCOLOUR_STYLE}\n\n${base}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `Style: ${styleParts.join(' ')}\n\n${base}\n\n${SINGLE_IMAGE_GUARD}`;
+  return `${REF_PREAMBLE}\n\nStyle: ${styleParts.join(' ')}\n\n${base}`;
 }
 
 // Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
@@ -45,10 +50,12 @@ async function generateOneImage(
   const delays = [5000, 15000, 30000];
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
+      // IMAGE-only modality prevents Gemini from producing annotated
+      // storyboard-style frames with text overlays burned into the image.
       const response = await ai.models.generateContent({
         model,
         contents: prompt,
-        config: { responseModalities: [Modality.IMAGE, Modality.TEXT] },
+        config: { responseModalities: [Modality.IMAGE] },
       });
       const candidate = response.candidates?.[0];
       for (const part of candidate?.content?.parts ?? []) {
@@ -56,15 +63,9 @@ async function generateOneImage(
           return { data: part.inlineData.data, mimeType: part.inlineData.mimeType ?? 'image/png' };
         }
       }
-      // Surface why there's no image: finish reason, safety ratings, or any text the model returned
+      // No image returned — surface finish reason for debugging
       const finishReason = candidate?.finishReason ?? 'UNKNOWN';
-      const textParts = (candidate?.content?.parts ?? [])
-        .filter((p) => p.text)
-        .map((p) => p.text)
-        .join(' ')
-        .slice(0, 200);
-      const detail = textParts ? `Model said: "${textParts}"` : `Finish reason: ${finishReason}`;
-      throw new Error(`No image in response (model: ${model}). ${detail}`);
+      throw new Error(`No image in response (model: ${model}). Finish reason: ${finishReason}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isQuotaExceeded = msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('billing');

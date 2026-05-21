@@ -69,19 +69,26 @@ These are not copied verbatim — you generate them from the source content:
     For characters: take the visual details (face, hair, build, wardrobe,
     distinguishing features). Place the character in flat lighting, against
     a plain neutral background, front-three-quarter angle, full body visible,
-    standing in a relaxed natural posture. Strip any scene-specific words
-    ("windswept", "salt-stiffened", "tense", "kneeling"). The result is a
-    clean character portrait suitable as a conditioning image. ~60-120 words.
+    standing in a relaxed natural posture. Strip ALL of the following:
+    scene-specific words ("windswept", "salt-stiffened", "tense", "kneeling"),
+    temporal or narrative markers ("in the 1962 memory", "present day",
+    "flashback", "memory sequence"), story context ("as she walks onto stage",
+    "while charging the car"), and any reference to multiple time periods or
+    scenes. The prompt must describe ONE person in ONE neutral setting.
+    The result is a clean character portrait suitable as a conditioning image.
+    ~60-120 words.
 
     For locations: establish the geography and key visual identifiers in a
     wide-establishing composition. Keep the lighting register from the
     Bible (afternoon vs night IS the location). No characters or moving
-    subjects in the reference. ~60-120 words.
+    subjects in the reference. Strip ALL temporal/narrative markers
+    ("in the 1962 memory", "present day", "flashback", story context).
+    Describe the place as a place, not as a scene. ~60-120 words.
 
     For props: object centred on neutral plain background, even soft lighting,
-    full visibility, scale referenceable. Strip scene-specific state
-    (don't say "sodden and water-heavy" — describe the dry / canonical state).
-    ~30-80 words.
+    full visibility, scale referenceable. Strip scene-specific state AND
+    narrative context (don't reference who owns it, what story it appears in,
+    or what time period — describe the object as an object). ~30-80 words.
 
   - key_frame_prompt (on each Shot)
 
