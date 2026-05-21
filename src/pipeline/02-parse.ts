@@ -357,11 +357,13 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
   }
 
   // Check 2: shot numbering is sequential from 1
+  // Alphanumeric source shots (18A, 18B) are renumbered sequentially by the
+  // parser, so shot_number must still be i+1 even if shot_label is present.
   for (let i = 0; i < sb.shots.length; i++) {
     const shot = sb.shots[i];
     if (shot && shot.shot_number !== i + 1) {
       warnings.push(
-        `Shot at index ${i} has shot_number ${shot.shot_number}, expected ${i + 1}`,
+        `Shot at index ${i} has shot_number ${shot.shot_number}, expected ${i + 1}${shot.shot_label ? ` (source label: ${shot.shot_label})` : ''}`,
       );
     }
   }

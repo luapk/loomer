@@ -97,6 +97,23 @@ These are not copied verbatim — you generate them from the source content:
     verbatim, environment, lighting, composition, style lock — no audio,
     no motion over time, no temporal language, ~80-150 words).
 
+**Alphanumeric shot identifiers (18A, 18B, etc.):**
+
+  When the storyboard uses alphanumeric shot identifiers like "Shot 18A" and
+  "Shot 18B", treat each as a SEPARATE shot requiring its own entry in the
+  shots array. Rules:
+
+  - Store the original label (e.g. "18A", "18B") in the shot_label field.
+  - Assign sequential integers for shot_number, renumbering the remainder of
+    the sequence: if shots 1–17 exist and then 18A and 18B appear, assign
+    shot_number 18 to 18A, 19 to 18B, and continue from 20 for the next shot.
+  - Each sub-shot must have its OWN key_frame_prompt describing ONLY the
+    moment depicted in that specific sub-shot. Do NOT combine the two moments
+    into a single prompt. If the source only has one "#### Key frame prompt"
+    block covering both, construct a separate still-image prompt for each from
+    the action beat, grammar, and continuity of that sub-shot.
+  - Normally numbered shots (1, 2, 3…) must NOT have a shot_label field set.
+
 **Field-level rules:**
 
   - When a Bible field is absent in the source markdown, set the structured

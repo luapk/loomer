@@ -237,7 +237,11 @@ export const ShotSoundDesignSchema = z.object({
 });
 
 export const ShotSchema = z.object({
-  shot_number: z.number().int().positive().describe('Sequence number, starting at 1.'),
+  shot_number: z.number().int().positive().describe('Sequence number, starting at 1. For alphanumeric shots like "18A"/"18B", assign sequential integers (18, 19, 20…). Preserve the original label in shot_label.'),
+  shot_label: z
+    .string()
+    .optional()
+    .describe('Original alphanumeric label from the storyboard markdown, e.g. "18A", "18B". Omit for normally numbered shots. This is the display identifier shown in the UI.'),
   descriptor: z.string().describe('Short label. e.g. "Establishing the world"'),
   function: z
     .string()

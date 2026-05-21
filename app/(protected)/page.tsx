@@ -1336,7 +1336,7 @@ function HomePageInner() {
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-xs font-mono font-semibold text-stone-400 flex-shrink-0 w-7">
-                    {String(shot.shot_number as number).padStart(2, '0')}
+                    {(shot.shot_label as string | undefined) ?? String(shot.shot_number as number).padStart(2, '0')}
                   </span>
                   <span className="text-sm font-medium text-stone-900 truncate">{shot.descriptor as string}</span>
                 </div>
@@ -1585,7 +1585,7 @@ function HomePageInner() {
                 <div className="p-3 space-y-1">
                   <div className="flex items-baseline gap-2">
                     <span className="text-xs font-mono font-bold text-stone-400 w-6 flex-shrink-0">
-                      {String(shot.shot_number as number).padStart(2, '0')}
+                      {(shot.shot_label as string | undefined) ?? String(shot.shot_number as number).padStart(2, '0')}
                     </span>
                     <span className="text-sm font-medium text-stone-900">{shot.descriptor as string}</span>
                   </div>
