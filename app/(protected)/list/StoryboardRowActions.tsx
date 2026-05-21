@@ -1,9 +1,72 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/src/components/ui/button';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Pencil, Check, X } from 'lucide-react';
+
+export function StoryboardRenameButton({ id, title }: { id: string; title: string }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  async function save() {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== title) {
+      await fetch(`/api/storyboard/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      router.refresh();
+    }
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDraft(title);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 flex-1 min-w-0">
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { void save(); }
+            if (e.key === 'Escape') { cancel(); }
+          }}
+          className="flex-1 min-w-0 text-sm font-medium text-stone-900 bg-transparent border-b border-stone-400 focus:outline-none focus:border-stone-700 px-0 py-0.5"
+        />
+        <button type="button" onClick={() => void save()} title="Save" className="p-1 rounded hover:bg-stone-100 text-stone-500 hover:text-stone-900">
+          <Check className="h-3.5 w-3.5" />
+        </button>
+        <button type="button" onClick={cancel} title="Cancel" className="p-1 rounded hover:bg-stone-100 text-stone-400 hover:text-stone-700">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      title="Rename project"
+      onClick={() => { setDraft(title); setEditing(true); }}
+      className="p-1 rounded hover:bg-stone-100 text-stone-400 hover:text-stone-700 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+    >
+      <Pencil className="h-3.5 w-3.5" />
+    </button>
+  );
+}
 
 export function StoryboardRowActions({ id }: { id: string }) {
   const router = useRouter();

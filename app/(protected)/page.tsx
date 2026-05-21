@@ -141,6 +141,10 @@ function HomePageInner() {
   const [editingVoShot, setEditingVoShot] = useState<number | null>(null);
   const [voEditText, setVoEditText] = useState('');
 
+  // Title editing
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+
   const [activeTab, setActiveTab] = useState<Tab>('storyboard');
 
   const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
@@ -907,11 +911,53 @@ function HomePageInner() {
               {state.parsedJson.brand}
             </p>
           )}
-          <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
-            {isLoaded && 'title' in state ? toTitleCase(state.title)
-              : (isGenerating || isParsing) && 'title' in state && state.title ? toTitleCase(state.title)
-              : <em>Storyboards that feel like film.</em>}
-          </h1>
+          {/* Title — inline editable when a storyboard is loaded */}
+          {editingTitle && 'id' in state ? (
+            <input
+              autoFocus
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter') {
+                  e.currentTarget.blur();
+                } else if (e.key === 'Escape') {
+                  setEditingTitle(false);
+                }
+              }}
+              onBlur={async () => {
+                const trimmed = titleDraft.trim();
+                if (trimmed && trimmed !== ('title' in state ? state.title : '')) {
+                  await fetch(`/api/storyboard/${state.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: trimmed }),
+                  });
+                  setState((prev) => 'title' in prev ? { ...prev, title: trimmed } : prev);
+                }
+                setEditingTitle(false);
+              }}
+              className="display-serif bg-transparent border-0 border-b-2 border-stone-400 focus:outline-none focus:border-stone-700 w-full"
+              style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)', padding: '0 0 2px 0' }}
+            />
+          ) : (
+            <div className="group flex items-start gap-2">
+              <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
+                {isLoaded && 'title' in state ? toTitleCase(state.title)
+                  : (isGenerating || isParsing) && 'title' in state && state.title ? toTitleCase(state.title)
+                  : <em>Storyboards that feel like film.</em>}
+              </h1>
+              {isLoaded && 'title' in state && (
+                <button
+                  type="button"
+                  title="Rename project"
+                  onClick={() => { setTitleDraft('title' in state ? state.title : ''); setEditingTitle(true); }}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity mt-1 p-1 rounded hover:bg-stone-100 text-stone-400 hover:text-stone-700 flex-shrink-0"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
           {state.phase === 'empty' && (
             <div className="mt-3" style={{ maxWidth: 480 }}>
               <p style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, lineHeight: 1.5, color: 'var(--ink-dim)' }}>

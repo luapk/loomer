@@ -5,7 +5,7 @@ import { Badge } from '@/src/components/ui/badge';
 import { Button } from '@/src/components/ui/button';
 import Link from 'next/link';
 import { FilmIcon, Plus, ExternalLink } from 'lucide-react';
-import { StoryboardRowActions } from './StoryboardRowActions';
+import { StoryboardRowActions, StoryboardRenameButton } from './StoryboardRowActions';
 
 function toTitleCase(str: string): string {
   const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
@@ -70,9 +70,12 @@ export default async function ListPage() {
             const shotCount = shots !== null ? shots.length : null;
 
             return (
-              <div key={sb.id} className="glass rounded-2xl p-5 flex items-center justify-between gap-4 hover:bg-white/70 transition-colors">
+              <div key={sb.id} className="group glass rounded-2xl p-5 flex items-center justify-between gap-4 hover:bg-white/70 transition-colors">
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-medium text-stone-900 truncate">{toTitleCase(sb.title)}</h3>
+                  <div className="flex items-center gap-1 min-w-0">
+                    <h3 className="font-medium text-stone-900 truncate">{toTitleCase(sb.title)}</h3>
+                    <StoryboardRenameButton id={sb.id} title={sb.title} />
+                  </div>
                   <p className="text-xs text-stone-400 font-mono mt-0.5">
                     {sb.created_at.toLocaleDateString('en-GB', {
                       day: 'numeric',
