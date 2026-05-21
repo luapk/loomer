@@ -63,6 +63,32 @@ function buildStyleDeclaration(
 }
 
 // ---------------------------------------------------------------------------
+// Scene grouping — consecutive shots sharing the same location_id form a scene.
+// Shots in different scenes (different location, temporal cut, flashback) run
+// fully in parallel with no prevFrame passed between them.
+// ---------------------------------------------------------------------------
+
+function groupByScene(
+  shots: ParsedStoryboard['shots'],
+): ParsedStoryboard['shots'][] {
+  const scenes: ParsedStoryboard['shots'][] = [];
+  let current: ParsedStoryboard['shots'] = [];
+  for (const shot of shots) {
+    if (
+      current.length === 0 ||
+      current[current.length - 1]!.continuity.location_id === shot.continuity.location_id
+    ) {
+      current.push(shot);
+    } else {
+      scenes.push(current);
+      current = [shot];
+    }
+  }
+  if (current.length > 0) scenes.push(current);
+  return scenes;
+}
+
+// ---------------------------------------------------------------------------
 // Conditioning image helper
 // ---------------------------------------------------------------------------
 
@@ -92,10 +118,12 @@ async function generateOneShot(
   prompt: string,
   styleDeclaration: string,
   conditioningEntities: { name: string; url: string }[],
+  prevFrameUrl: string | null,
 ): Promise<{ data: string; mimeType: string } | null> {
-  const entityResults = await Promise.all(
-    conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
-  );
+  const [prevFrameResult, ...entityResults] = await Promise.all([
+    prevFrameUrl ? fetchImageAsBase64(prevFrameUrl) : Promise.resolve(null),
+    ...conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
+  ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
@@ -103,6 +131,17 @@ async function generateOneShot(
   // Style declaration comes FIRST — before any images — so the model anchors to
   // the output medium before it sees photographic references.
   parts.push({ text: styleDeclaration });
+
+  // Spatial continuity reference — the immediately preceding shot in this scene.
+  // CRITICAL: the model must NOT reproduce any visual content from this image.
+  // It is used ONLY to read screen-side positions, eyeline directions, and room
+  // geography so those remain consistent across cuts. The scene change to a
+  // different location_id already guarantees this image is never passed across
+  // a location or temporal cut (flashback, period jump, etc.).
+  if (prevFrameResult) {
+    parts.push({ text: '[SPATIAL LAYOUT REFERENCE — DO NOT COPY CONTENT: The image below is the immediately preceding shot in this scene. DO NOT reproduce, embed, overlay, inset, or include ANY visual content from it in your output. DO NOT use it as a source of characters, objects, backgrounds, colours, or style. Read it ONLY for: (1) which screen-side each character occupies (left vs right of frame), (2) eyeline directions, (3) positions of major environmental elements. Your output image must contain ONLY what the following shot description specifies.]' });
+    parts.push({ inlineData: { data: prevFrameResult.data, mimeType: prevFrameResult.mimeType } });
+  }
 
   // Named identity references. Each ref is labelled so the model knows which
   // entity it represents. The model must extract identity (face, features,
@@ -227,90 +266,102 @@ export async function POST(
       try {
         send({ type: 'start', total: parsed.shots.length });
 
-        // All shots run in parallel — no prevFrame conditioning.
+        // Scenes run in parallel; shots within a scene run sequentially so each
+        // shot can receive the previous rendered frame for spatial continuity.
+        // A scene boundary (different location_id) guarantees prevFrame is never
+        // passed across a location cut, temporal flashback, or period jump.
+        const scenes = groupByScene(parsed.shots);
+
         await Promise.all(
-          parsed.shots.map(async (shot) => {
-            const shotKey = String(shot.shot_number);
-            const shotStart = Date.now();
+          scenes.map(async (scene) => {
+            let prevShotUrl: string | null = null;
 
-            send({ type: 'shot_start', shotNumber: shot.shot_number, descriptor: shot.descriptor });
+            for (const shot of scene) {
+              const shotKey = String(shot.shot_number);
+              const shotStart = Date.now();
 
-            shotKeyFrames[shotKey] = { status: 'generating', url: null };
-            await getDb().storyboard.update({
-              where: { id },
-              data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
-            });
+              send({ type: 'shot_start', shotNumber: shot.shot_number, descriptor: shot.descriptor });
 
-            try {
-              const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock);
-              const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
+              shotKeyFrames[shotKey] = { status: 'generating', url: null };
+              await getDb().storyboard.update({
+                where: { id },
+                data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
+              });
 
-              // Primary: entities explicitly in this shot's continuity.
-              const continuityIds = new Set<string>([
-                ...shot.continuity.characters,
-                shot.continuity.location_id,
-                ...shot.continuity.props_persisting,
-                ...shot.continuity.props_introduced,
-              ]);
-              const primaryEntities = [...continuityIds]
-                .map((entityId) => {
-                  const url = selectedRefUrl(entityId);
-                  return url ? { name: entityNames[entityId] ?? entityId, url } : null;
-                })
-                .filter((e): e is { name: string; url: string } => e !== null);
+              try {
+                const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock);
+                const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
 
-              // Secondary: props with an approved ref that aren't in this shot's
-              // explicit continuity (packshots, hero products, always-present items).
-              // Props are safe to add globally — unlike characters, the model won't
-              // spontaneously insert a product into a frame it doesn't belong in.
-              const secondaryEntities = parsed.props
-                .filter((p) => !continuityIds.has(p.id))
-                .map((p) => {
-                  const url = selectedRefUrl(p.id);
-                  return url ? { name: p.name, url } : null;
-                })
-                .filter((e): e is { name: string; url: string } => e !== null);
+                // Primary: entities explicitly in this shot's continuity.
+                const continuityIds = new Set<string>([
+                  ...shot.continuity.characters,
+                  shot.continuity.location_id,
+                  ...shot.continuity.props_persisting,
+                  ...shot.continuity.props_introduced,
+                ]);
+                const primaryEntities = [...continuityIds]
+                  .map((entityId) => {
+                    const url = selectedRefUrl(entityId);
+                    return url ? { name: entityNames[entityId] ?? entityId, url } : null;
+                  })
+                  .filter((e): e is { name: string; url: string } => e !== null);
 
-              const conditioningEntities = [...primaryEntities, ...secondaryEntities];
+                // Secondary: props with an approved ref that aren't in this shot's
+                // explicit continuity (packshots, hero products, always-present items).
+                // Props are safe to add globally — unlike characters, the model won't
+                // spontaneously insert a product into a frame it doesn't belong in.
+                const secondaryEntities = parsed.props
+                  .filter((p) => !continuityIds.has(p.id))
+                  .map((p) => {
+                    const url = selectedRefUrl(p.id);
+                    return url ? { name: p.name, url } : null;
+                  })
+                  .filter((e): e is { name: string; url: string } => e !== null);
 
-              const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities);
+                const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
-              if (!img) {
+                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevShotUrl);
+
+                if (!img) {
+                  const durationMs = Date.now() - shotStart;
+                  shotKeyFrames[shotKey] = { status: 'error', url: null, error: 'No image returned from model' };
+                  await getDb().storyboard.update({
+                    where: { id },
+                    data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
+                  });
+                  send({ type: 'shot_error', shotNumber: shot.shot_number, message: 'No image returned from model', durationMs });
+                  prevShotUrl = null;
+                  continue;
+                }
+
+                const buffer = Buffer.from(img.data, 'base64');
+                const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+                const blob = await put(
+                  `${id}/shots/${shot.shot_number}-${runId}.${ext}`,
+                  buffer,
+                  { access: 'public', contentType: img.mimeType },
+                );
+
                 const durationMs = Date.now() - shotStart;
-                shotKeyFrames[shotKey] = { status: 'error', url: null, error: 'No image returned from model' };
+                shotKeyFrames[shotKey] = { status: 'done', url: blob.url };
                 await getDb().storyboard.update({
                   where: { id },
                   data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
                 });
-                send({ type: 'shot_error', shotNumber: shot.shot_number, message: 'No image returned from model', durationMs });
-                return;
+
+                send({ type: 'shot_done', shotNumber: shot.shot_number, url: blob.url, durationMs });
+                prevShotUrl = blob.url;
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                const durationMs = Date.now() - shotStart;
+                shotKeyFrames[shotKey] = { status: 'error', url: null, error: message };
+                await getDb().storyboard.update({
+                  where: { id },
+                  data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
+                });
+                send({ type: 'shot_error', shotNumber: shot.shot_number, message, durationMs });
+                prevShotUrl = null;
               }
-
-              const buffer = Buffer.from(img.data, 'base64');
-              const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
-              const blob = await put(
-                `${id}/shots/${shot.shot_number}-${runId}.${ext}`,
-                buffer,
-                { access: 'public', contentType: img.mimeType },
-              );
-
-              const durationMs = Date.now() - shotStart;
-              shotKeyFrames[shotKey] = { status: 'done', url: blob.url };
-              await getDb().storyboard.update({
-                where: { id },
-                data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
-              });
-
-              send({ type: 'shot_done', shotNumber: shot.shot_number, url: blob.url, durationMs });
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              const durationMs = Date.now() - shotStart;
-              shotKeyFrames[shotKey] = { status: 'error', url: null, error: message };
-              await getDb().storyboard.update({
-                where: { id },
-                data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
-              });
-              send({ type: 'shot_error', shotNumber: shot.shot_number, message, durationMs });
             }
           }),
         );
