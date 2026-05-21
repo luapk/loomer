@@ -838,8 +838,11 @@ function HomePageInner() {
   // Which tabs have content yet
   const hasStoryboard = state.phase !== 'empty' && state.phase !== 'error';
   const hasShots = isLoaded;
-  const hasImages = state.phase === 'generating_refs' || state.phase === 'refs_done' ||
-    state.phase === 'generating_shots' || state.phase === 'shots_done';
+  // Elements tab is enabled as soon as the storyboard is parsed — the user
+  // needs to be able to click in and hit "Generate stills" even before any
+  // refs exist. Previously this was locked to generating_refs/refs_done which
+  // created a deadlock when the generation settings panel was tab-gated.
+  const hasImages = isLoaded;
   const hasBoards = state.phase === 'generating_shots' || state.phase === 'shots_done' || Object.keys(shotKeyFrames).length > 0;
 
   // Completion state for green tick icons
@@ -923,7 +926,15 @@ function HomePageInner() {
         {isLoaded && 'warnings' in state && (
           <div className="flex items-center gap-2 flex-shrink-0 pt-1">
             {state.warnings.length > 0 && (
-              <Badge variant="warning">{state.warnings.length} warnings</Badge>
+              <button
+                type="button"
+                onClick={() => setActiveTab('storyboard')}
+                title="View integrity warnings on Script Analysis tab"
+              >
+                <Badge variant="warning" className="cursor-pointer hover:opacity-80 transition-opacity">
+                  {state.warnings.length} {state.warnings.length === 1 ? 'warning' : 'warnings'}
+                </Badge>
+              </button>
             )}
             <button
               onClick={() => { setState({ phase: 'empty' }); setScript(''); setRefStills({}); setShotKeyFrames({}); setActiveTab('storyboard'); }}
@@ -1246,11 +1257,20 @@ function HomePageInner() {
           {isLoaded && 'markdown' in state && (
             <div className="space-y-3">
               {'warnings' in state && state.warnings.length > 0 && (
-                <div className="bg-amber-50/60 border border-amber-200/60 rounded-xl p-4 space-y-1">
-                  <p className="text-xs font-medium text-amber-700 mb-2">Integrity warnings — review before generating:</p>
-                  {state.warnings.map((w, i) => (
-                    <p key={i} className="text-xs text-amber-600 font-mono">• {w}</p>
-                  ))}
+                <div className="bg-amber-50/60 border border-amber-200/60 rounded-xl p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-xs font-medium text-amber-700">
+                      {state.warnings.length} integrity {state.warnings.length === 1 ? 'warning' : 'warnings'} — non-fatal, storyboard is still usable
+                    </p>
+                  </div>
+                  <p className="text-xs text-amber-600/80">
+                    <strong>Bible-injection warnings</strong> fire when a character&apos;s entity name doesn&apos;t appear verbatim in the shot prompt. This is usually a false positive — the storyboard skill often uses pronouns or scene descriptions (&quot;the woman&quot;, &quot;she&quot;) rather than repeating the entity name. The reference image will still be used for conditioning. Warnings about missing descriptions or very short prompts are more likely to need attention.
+                  </p>
+                  <div className="space-y-1 pt-1 border-t border-amber-200/50">
+                    {state.warnings.map((w, i) => (
+                      <p key={i} className="text-xs text-amber-700 font-mono leading-snug">• {w}</p>
+                    ))}
+                  </div>
                 </div>
               )}
               <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[600px] whitespace-pre-wrap leading-relaxed border border-stone-100">

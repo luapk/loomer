@@ -458,7 +458,7 @@ function runIntegrityChecks(sb: ParsedStoryboard): string[] {
     for (const charId of shot.continuity.characters) {
       const char = sb.characters.find((c) => c.id === charId);
       if (!char) continue; // already warned above
-      if (!shot.key_frame_prompt.includes(char.name)) {
+      if (!shot.key_frame_prompt.toLowerCase().includes(char.name.toLowerCase())) {
         warnings.push(
           `Shot ${shot.shot_number}: character ${charId} (${char.name}) is in continuity but name does not appear in key_frame_prompt — possible Bible-injection failure`,
         );
