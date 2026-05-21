@@ -7,7 +7,7 @@ import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 // ---------------------------------------------------------------------------
 // Types

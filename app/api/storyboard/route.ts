@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+export const maxDuration = 800;
 
 import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
