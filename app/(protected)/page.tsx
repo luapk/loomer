@@ -129,6 +129,11 @@ function HomePageInner() {
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [notifyWhenDone, setNotifyWhenDone] = useState(false);
 
+  // Prompt sync from references
+  const [syncingPrompts, setSyncingPrompts] = useState(false);
+  const [syncLog, setSyncLog] = useState<string[]>([]);
+  const [showSyncLog, setShowSyncLog] = useState(false);
+
   // Dev timing stats
   const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
 
@@ -520,6 +525,68 @@ function HomePageInner() {
         osc.stop(ctx.currentTime + t + 0.9);
       });
     } catch { /* AudioContext may be blocked */ }
+  }
+
+  async function syncPrompts(id: string) {
+    setSyncingPrompts(true);
+    setSyncLog([]);
+    setShowSyncLog(true);
+    try {
+      const res = await fetch(`/api/storyboard/${id}/sync-prompts`, { method: 'POST' });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        setSyncLog([`Error: ${data.error ?? 'Failed'}`]);
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6)) as Record<string, unknown>;
+            if (event.type === 'entity_analysed') {
+              setSyncLog((prev) => [
+                ...prev,
+                `Ref "${event.name as string}" → "${event.newAppearance as string}"`,
+              ]);
+            } else if (event.type === 'shot_updated') {
+              setSyncLog((prev) => [
+                ...prev,
+                `Shot ${event.shotNumber as number} updated: ${event.descriptor as string}`,
+              ]);
+            } else if (event.type === 'done') {
+              const updated = event.updatedShots as number;
+              const total = event.totalShots as number;
+              setSyncLog((prev) => [
+                ...prev,
+                `Done — ${updated} of ${total} shot prompts updated`,
+              ]);
+              // Refresh local parsedJson so the edit-prompt textarea shows the new text
+              const check = await fetch(`/api/storyboard/${id}`);
+              if (check.ok) {
+                const data = (await check.json()) as { parsed_json: unknown };
+                setState((prev) =>
+                  'parsedJson' in prev ? { ...prev, parsedJson: data.parsed_json } : prev
+                );
+              }
+            } else if (event.type === 'error') {
+              setSyncLog((prev) => [...prev, `Error: ${event.message as string}`]);
+            }
+          } catch { /* skip malformed SSE line */ }
+        }
+      }
+    } catch {
+      setSyncLog((prev) => [...prev, 'Network error — please try again']);
+    } finally {
+      setSyncingPrompts(false);
+    }
   }
 
   async function doParse(id: string, title: string, markdown: string) {
@@ -1050,6 +1117,50 @@ function HomePageInner() {
 
             </div>
           </div>
+
+          {/* Sync prompts from references — shown when at least one ref is approved */}
+          {hasAnyApproved && (
+            <div className="border-t border-stone-100 pt-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-stone-700">Sync shot prompts from references</p>
+                  <p className="text-xs text-stone-400 mt-0.5">
+                    Rewrites appearance descriptions in affected shot prompts to match your approved reference images.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={syncingPrompts || !('id' in state)}
+                  onClick={() => { if ('id' in state) void syncPrompts(state.id); }}
+                >
+                  {syncingPrompts ? (
+                    <><Loader2 className="h-3.5 w-3.5 animate-spin" />Syncing…</>
+                  ) : (
+                    'Sync prompts'
+                  )}
+                </Button>
+              </div>
+              {syncLog.length > 0 && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSyncLog((v) => !v)}
+                    className="text-xs text-stone-400 hover:text-stone-600 transition-colors"
+                  >
+                    {showSyncLog ? '▾ Hide log' : '▸ Show log'}
+                  </button>
+                  {showSyncLog && (
+                    <div className="mt-1.5 rounded-lg bg-stone-50 border border-stone-100 p-2.5 space-y-1 max-h-40 overflow-y-auto">
+                      {syncLog.map((line, i) => (
+                        <p key={i} className="text-xs text-stone-600 font-mono leading-snug">{line}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
