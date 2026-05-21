@@ -145,6 +145,9 @@ function HomePageInner() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
 
+  // Re-parse confirmation
+  const [confirmingReparse, setConfirmingReparse] = useState(false);
+
   const [activeTab, setActiveTab] = useState<Tab>('storyboard');
 
   const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
@@ -1330,6 +1333,42 @@ function HomePageInner() {
       {/* Shots tab */}
       {activeTab === 'shots' && isLoaded && 'parsedJson' in state && (
         <div className="space-y-3">
+          {/* Redo shot list — re-parses the source script */}
+          <div className="flex items-center justify-end gap-2">
+            {confirmingReparse ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-stone-500">Re-parse the script? This rebuilds the shot list.</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 px-2.5 text-xs"
+                  onClick={() => {
+                    setConfirmingReparse(false);
+                    if ('markdown' in state) void doParse(state.id, state.title, state.markdown);
+                  }}
+                >
+                  Yes, redo
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingReparse(false)}
+                  className="text-xs text-stone-400 hover:text-stone-700 transition-colors px-1.5 py-1"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingReparse(true)}
+                title="Re-parse the source script into a fresh shot list"
+                className="flex items-center gap-1.5 text-xs text-stone-500 hover:text-stone-900 transition-colors px-2 py-1 rounded-md hover:bg-stone-100"
+              >
+                <ScanEye className="h-3.5 w-3.5" />
+                Redo shot list
+              </button>
+            )}
+          </div>
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
           {(state.parsedJson?.shots ?? []).map((shot: any) => (
             <div key={shot.shot_number as number} className="glass rounded-xl p-4 space-y-2">

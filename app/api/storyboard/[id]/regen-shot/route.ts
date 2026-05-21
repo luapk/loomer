@@ -16,20 +16,28 @@ export const maxDuration = 300;
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
 
+// Single-frame guard — see generate-shots/route.ts for rationale.
+const SINGLE_FRAME_GUARD =
+  'Render ONE single continuous frame — a single photographic moment in a single location. ' +
+  'DO NOT produce a split-screen, diptych, side-by-side panels, before/after panels, inset images, ' +
+  'picture-in-picture, collage, or any multi-panel layout. DO NOT add text overlays, captions, or labels. ' +
+  'If the description below mentions a "match cut", "intercut", "meanwhile", or another shot/timeline, ' +
+  'ignore that editorial language entirely and depict ONLY this one shot\'s frozen moment.';
+
 function buildShotPrompt(
   keyFramePrompt: string,
   renderStyle: string,
   styleLock: ParsedStoryboard['style_lock'],
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
+    return `${SINGLE_FRAME_GUARD}\n\nStyle: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `Style: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
+  return `${SINGLE_FRAME_GUARD}\n\nStyle: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
 }
 
 function buildStyleDeclaration(
