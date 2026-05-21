@@ -12,6 +12,11 @@ export const maxDuration = 800;
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art.';
 
+// Guard appended to every reference still prompt to prevent Gemini from
+// producing split-panel or collage outputs when the prompt mentions multiple views.
+const SINGLE_IMAGE_GUARD =
+  'Single image only. One view, one moment, no panels, no collage, no split-screen, no before/after.';
+
 function buildPrompt(
   entity: RefEntity,
   renderStyle: string,
@@ -19,14 +24,14 @@ function buildPrompt(
 ): string {
   const base = entity.reference_still_prompt;
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `Style: ${WATERCOLOUR_STYLE}\n\n${base}`;
+    return `Style: ${WATERCOLOUR_STYLE}\n\n${base}\n\n${SINGLE_IMAGE_GUARD}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `Style: ${styleParts.join(' ')}\n\n${base}`;
+  return `Style: ${styleParts.join(' ')}\n\n${base}\n\n${SINGLE_IMAGE_GUARD}`;
 }
 
 // Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
