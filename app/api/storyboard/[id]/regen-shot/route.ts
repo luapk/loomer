@@ -103,7 +103,7 @@ async function generateOneShot(
   parts.push({ text: styleDeclaration });
 
   if (loadedEntities.length > 0) {
-    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below are the SOLE visual specification for each entity. DISREGARD any colour, material, or appearance adjective used to describe these entities in the prompt text — those reflect the original brief and may be outdated. The reference image is always correct. If the prompt says "blue button" but the reference shows a yellow button, render it yellow. Extract identity and translate it into the OUTPUT STYLE declared above. Do NOT copy the photographic medium of the references.]' });
+    parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define ONLY the visual appearance of each entity — its shape, colour, texture, materials, and distinguishing features. Extract this visual identity and render it in the OUTPUT STYLE declared above. DO NOT copy the spatial position, orientation, camera angle, perspective geometry, or compositional arrangement from any reference image. The shot description governs ALL composition — where entities are placed, which direction they face, how the camera frames the scene. References answer "what does it look like?" only; the shot prompt answers "how is the scene composed?". DISREGARD any colour, material, or appearance adjective in the prompt text for these entities — the reference image overrides it. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
       // Strip appearance descriptor (everything after " — ") from the label so the
       // label text does not contradict the reference image.
