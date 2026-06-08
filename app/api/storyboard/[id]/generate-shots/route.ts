@@ -190,17 +190,22 @@ async function generateOneShot(
       return null;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const is429 = msg.includes('"code":429') || msg.includes('status: 429') || msg.includes('HTTP 429');
+      const msgLower = msg.toLowerCase();
+      const isSpendingCap = msgLower.includes('spending cap') || (msgLower.includes('monthly') && msgLower.includes('cap'));
       const is403 = msg.includes('"code":403') || msg.includes('status: 403') || msg.includes('HTTP 403');
-      const mentionsBilling = msg.toLowerCase().includes('billing') || msg.toLowerCase().includes('payment');
-      const isHardQuota = is403 || mentionsBilling;
-      const isRateLimit = is429 && !isHardQuota;
+      const mentionsBilling = msgLower.includes('billing') || msgLower.includes('payment');
+      const isHardBlock = is403 || mentionsBilling || isSpendingCap;
+      const is429 = msg.includes('"code":429') || msg.includes('status: 429') || msg.includes('HTTP 429');
+      const isRateLimit = is429 && !isHardBlock;
       if (isRateLimit && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
       }
-      if (isHardQuota) {
-        throw new Error(`Google AI quota/billing error — check your plan at ai.google.dev. Raw: ${msg}`);
+      if (isHardBlock) {
+        const hint = isSpendingCap
+          ? 'Monthly spending cap exceeded — raise or remove the cap at aistudio.google.com (Billing → Manage spending).'
+          : 'Google AI quota/billing error — check your plan at ai.google.dev.';
+        throw new Error(`${hint} Raw: ${msg}`);
       }
       throw err;
     }
