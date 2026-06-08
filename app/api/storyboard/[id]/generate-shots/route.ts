@@ -190,14 +190,17 @@ async function generateOneShot(
       return null;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const isQuotaExceeded = msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('billing');
-      const isRateLimit = (msg.includes('"code":429') || msg.includes('"code":400')) && !isQuotaExceeded;
+      const is429 = msg.includes('"code":429') || msg.includes('status: 429') || msg.includes('HTTP 429');
+      const is403 = msg.includes('"code":403') || msg.includes('status: 403') || msg.includes('HTTP 403');
+      const mentionsBilling = msg.toLowerCase().includes('billing') || msg.toLowerCase().includes('payment');
+      const isHardQuota = is403 || mentionsBilling;
+      const isRateLimit = is429 && !isHardQuota;
       if (isRateLimit && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
       }
-      if (isQuotaExceeded) {
-        throw new Error('Google AI quota exceeded — upgrade your plan at ai.google.dev or try again tomorrow.');
+      if (isHardQuota) {
+        throw new Error(`Google AI quota/billing error — check your plan at ai.google.dev. Raw: ${msg}`);
       }
       throw err;
     }
