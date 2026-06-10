@@ -424,6 +424,14 @@ function HomePageInner() {
   }
 
   async function startShotGeneration(id: string) {
+    // Save settings first — generate-shots reads render_style/image_model from
+    // the DB, so an unsaved toggle change would silently use the old style.
+    await fetch(`/api/storyboard/${id}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ render_style: renderStyle, image_model: imageModel }),
+    });
+
     setState((prev) =>
       prev.phase === 'refs_done' || prev.phase === 'parsed' || prev.phase === 'shots_done'
         ? { ...prev, phase: 'generating_shots' }
