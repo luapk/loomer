@@ -82,7 +82,10 @@ export async function parseStoryboard(
     return failResult('ANTHROPIC_API_KEY not set', startTime);
   }
 
-  const model = options.model ?? 'claude-sonnet-4-6';
+  // Haiku 4.5: the parse is verbatim structured extraction (copying markdown
+  // into JSON), output-token-bound — Haiku's faster throughput cuts parse time
+  // ~2-3x vs Sonnet with no loss on this task. Validation retry catches misses.
+  const model = options.model ?? 'claude-haiku-4-5-20251001';
   const maxTokens = options.maxTokens ?? 64000;
   const verbose = options.verbose ?? false;
 
