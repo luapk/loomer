@@ -1718,7 +1718,7 @@ function HomePageInner() {
                   )}
                   {/* Version history nav — shown when there are older renders */}
                   {hasHistory && frame?.status === 'done' && (
-                    <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 rounded-lg px-1.5 py-1">
+                    <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/70 backdrop-blur-sm rounded-full px-2 py-1">
                       <button
                         type="button"
                         onClick={() => setShotHistoryIndex((prev) => ({ ...prev, [n]: Math.min((prev[n] ?? 0) + 1, allUrls.length - 1) }))}
@@ -1821,23 +1821,21 @@ function HomePageInner() {
                   ))}
                 </div>
                 {/* Metadata */}
-                <div className="p-3 space-y-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-xs font-mono font-bold text-stone-400 w-6 flex-shrink-0">
+                <div className="p-4 space-y-1.5">
+                  <div className="flex items-baseline gap-2.5">
+                    <span className="text-[11px] font-mono font-semibold text-stone-400 tabular-nums w-7 flex-shrink-0">
                       {(shot.shot_label as string | undefined) ?? String(shot.shot_number as number).padStart(2, '0')}
                     </span>
-                    <span className="text-sm font-medium text-stone-900">{shot.descriptor as string}</span>
+                    <span className="text-sm font-semibold text-stone-900 leading-snug">{shot.descriptor as string}</span>
                   </div>
-                  <p className="text-xs text-stone-500 pl-8 leading-snug">{shot.function as string}</p>
-                  <div className="flex items-center gap-2 pl-8 flex-wrap">
-                    <span className="text-xs font-mono text-stone-400">{shot.grammar?.scale as string}</span>
-                    <span className="text-stone-200">·</span>
-                    <span className="text-xs font-mono text-stone-400">{shot.grammar?.lens as string}</span>
-                    <span className="text-stone-200">·</span>
-                    <span className="text-xs text-stone-400">Veo {shot.duration?.veo as number}s</span>
+                  <p className="text-[13px] text-stone-600 leading-relaxed pl-[38px]">{shot.function as string}</p>
+                  <div className="flex items-center gap-1.5 pl-[38px] pt-1 flex-wrap">
+                    <span className="text-[11px] font-mono uppercase tracking-wide text-stone-600 bg-stone-100 rounded-md px-1.5 py-0.5">{shot.grammar?.scale as string}</span>
+                    <span className="text-[11px] font-mono text-stone-600 bg-stone-100 rounded-md px-1.5 py-0.5">{shot.grammar?.lens as string}</span>
+                    <span className="text-[11px] font-mono text-stone-600 bg-stone-100 rounded-md px-1.5 py-0.5">{shot.duration?.veo as number}s</span>
                   </div>
                   {(shot.dialogue_vo || editingVoShot === (shot.shot_number as number)) && (
-                    <div className="pl-8 group/vo flex items-start gap-1.5">
+                    <div className="pl-[38px] pt-1 group/vo flex items-start gap-1.5">
                       {editingVoShot === (shot.shot_number as number) ? (
                         <>
                           <textarea
@@ -1883,7 +1881,7 @@ function HomePageInner() {
                         </>
                       ) : (
                         <>
-                          <p className="flex-1 text-xs text-stone-600 italic leading-snug">"{shot.dialogue_vo as string}"</p>
+                          <p className="flex-1 text-[13px] text-stone-700 italic leading-relaxed">&ldquo;{shot.dialogue_vo as string}&rdquo;</p>
                           <button
                             type="button"
                             title="Edit VO / dialogue"

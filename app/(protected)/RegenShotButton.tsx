@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { RefreshCw, Loader2, X } from 'lucide-react';
 import { Button } from '@/src/components/ui/button';
 import { SHOT_VARIATION_GROUPS } from '@/src/lib/shot-variations';
 
 const MAX_SELECTED = 3;
+const POPOVER_WIDTH = 320;
+const VIEWPORT_MARGIN = 12;
 
 interface EntityInfo {
   id: string;
@@ -20,6 +23,12 @@ interface Props {
   onSuccess: (url: string, history?: string[]) => void;
 }
 
+interface PopoverPosition {
+  top: number;
+  left: number;
+  maxHeight: number;
+}
+
 export function RegenShotButton({
   storyboardId,
   shotNumber,
@@ -28,37 +37,84 @@ export function RegenShotButton({
   onSuccess,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [openUpward, setOpenUpward] = useState(false);
+  const [position, setPosition] = useState<PopoverPosition | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [overridePrompt, setOverridePrompt] = useState('');
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
-  // Reset and pre-populate when popover opens; detect whether to open upward.
+  // The popover renders into document.body via a portal, so it can never be
+  // clipped by the card's overflow-hidden. Position is computed from the
+  // trigger rect and clamped to the viewport; the footer stays reachable
+  // because maxHeight never exceeds the available space.
+  const computePosition = useCallback((): PopoverPosition | null => {
+    const trigger = triggerRef.current;
+    if (!trigger) return null;
+    const rect = trigger.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const left = Math.max(
+      VIEWPORT_MARGIN,
+      Math.min(rect.right - POPOVER_WIDTH, vw - POPOVER_WIDTH - VIEWPORT_MARGIN),
+    );
+
+    const spaceBelow = vh - rect.bottom - VIEWPORT_MARGIN - 8;
+    const spaceAbove = rect.top - VIEWPORT_MARGIN - 8;
+
+    if (spaceBelow >= 320 || spaceBelow >= spaceAbove) {
+      return { top: rect.bottom + 8, left, maxHeight: Math.min(560, spaceBelow) };
+    }
+    const maxHeight = Math.min(560, spaceAbove);
+    return { top: rect.top - 8 - maxHeight, left, maxHeight };
+  }, []);
+
+  // Reset and pre-populate when popover opens
   useEffect(() => {
     if (open) {
       setOverridePrompt(keyFramePrompt ?? '');
       setExcludedIds(new Set());
       setSelected([]);
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setOpenUpward(window.innerHeight - rect.bottom < 420);
-      }
+      setPosition(computePosition());
     }
-  }, [open, keyFramePrompt]);
+  }, [open, keyFramePrompt, computePosition]);
 
-  // Close on outside click
+  // Keep the popover anchored while the page scrolls or resizes.
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => setPosition(computePosition());
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [open, computePosition]);
+
+  // Close on outside click — popover lives in a portal, so check both nodes.
   useEffect(() => {
     if (!open) return;
     function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (popoverRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  // Close on Escape.
+  useEffect(() => {
+    if (!open) return;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
   }, [open]);
 
   function toggleVariation(prompt: string) {
@@ -116,10 +172,129 @@ export function RegenShotButton({
       }).join(' + ')
     : null;
 
+  const popover = open && position && (
+    <div
+      ref={popoverRef}
+      className="fixed z-50 rounded-xl border border-stone-200 bg-white shadow-xl flex flex-col"
+      style={{
+        top: position.top,
+        left: position.left,
+        width: POPOVER_WIDTH,
+        maxHeight: position.maxHeight,
+      }}
+    >
+      <div className="p-3 border-b border-stone-100 flex-shrink-0">
+        <p className="text-xs font-semibold text-stone-900">Regenerate shot</p>
+        <p className="text-xs text-stone-400 mt-0.5">Edit the prompt, pick variations, or just retry.</p>
+      </div>
+
+      <div className="p-3 space-y-3 overflow-y-auto flex-1 min-h-0">
+        {/* Editable prompt */}
+        <div>
+          <p className="text-xs font-medium text-stone-500 mb-1.5">Prompt</p>
+          <textarea
+            rows={4}
+            value={overridePrompt}
+            onChange={(e) => setOverridePrompt(e.target.value)}
+            placeholder="Describe the shot…"
+            className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-y focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
+          />
+        </div>
+
+        {/* Variation chips */}
+        {SHOT_VARIATION_GROUPS.map((group) => (
+          <div key={group.id}>
+            <p className="text-xs font-medium text-stone-500 mb-1.5">{group.label}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {group.variations.map((v) => {
+                const isActive = selected.includes(v.prompt);
+                const isDisabled = !isActive && selected.length >= MAX_SELECTED;
+                return (
+                  <button
+                    key={v.id}
+                    type="button"
+                    disabled={isDisabled}
+                    onClick={() => toggleVariation(v.prompt)}
+                    className={`px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                      isActive
+                        ? 'bg-stone-900 text-white border-stone-900'
+                        : isDisabled
+                          ? 'bg-stone-50 text-stone-300 border-stone-200 cursor-not-allowed'
+                          : 'bg-white text-stone-700 border-stone-200 hover:border-stone-400 hover:text-stone-900'
+                    }`}
+                  >
+                    {v.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        {/* Live Director's note preview */}
+        {directorNotePreview && (
+          <div className="rounded-md bg-stone-50 border border-stone-100 px-2.5 py-2">
+            <p className="text-xs text-stone-400 mb-0.5 font-medium">Director&apos;s note (will append)</p>
+            <p className="text-xs text-stone-600 italic">{directorNotePreview}</p>
+          </div>
+        )}
+
+        {/* Exclude entities from conditioning */}
+        {conditioningEntities.length > 0 && (
+          <div>
+            <p className="text-xs font-medium text-stone-500 mb-1.5">Remove from this frame</p>
+            <div className="flex flex-wrap gap-1.5">
+              {conditioningEntities.map((e) => {
+                const isExcluded = excludedIds.has(e.id);
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    onClick={() => toggleExclude(e.id)}
+                    title={isExcluded ? `Re-include ${e.name}` : `Exclude ${e.name} from conditioning`}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                      isExcluded
+                        ? 'bg-red-50 text-red-600 border-red-200 line-through'
+                        : 'bg-white text-stone-600 border-stone-200 hover:border-red-300 hover:text-red-600'
+                    }`}
+                  >
+                    {isExcluded && <X className="h-2.5 w-2.5 flex-shrink-0" />}
+                    {e.name}
+                  </button>
+                );
+              })}
+            </div>
+            {excludedIds.size > 0 && (
+              <p className="text-xs text-stone-400 mt-1.5">Excluded entities won&apos;t be used as visual references for this frame.</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="p-3 border-t border-stone-100 flex items-center gap-2 flex-shrink-0">
+        <Button
+          size="sm"
+          className="flex-1"
+          onClick={() => { void regen(selected); }}
+        >
+          Regenerate
+        </Button>
+        <button
+          type="button"
+          onClick={() => { void regen([]); }}
+          className="text-xs text-stone-500 hover:text-stone-900 transition-colors px-2 py-1.5"
+        >
+          Just retry
+        </button>
+      </div>
+    </div>
+  );
+
   return (
-    <div ref={containerRef} className="relative">
+    <div className="relative">
       {/* Trigger */}
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Regenerate shot"
         disabled={loading}
@@ -140,115 +315,8 @@ export function RegenShotButton({
         </div>
       )}
 
-      {/* Popover */}
-      {open && (
-        <div className={`absolute right-0 z-50 w-80 rounded-xl border border-stone-200 bg-white shadow-xl flex flex-col max-h-[min(560px,85vh)] ${openUpward ? 'bottom-8' : 'top-8'}`}>
-          <div className="p-3 border-b border-stone-100 flex-shrink-0">
-            <p className="text-xs font-semibold text-stone-900">Regenerate shot</p>
-            <p className="text-xs text-stone-400 mt-0.5">Edit the prompt, pick variations, or just retry.</p>
-          </div>
-
-          <div className="p-3 space-y-3 overflow-y-auto flex-1 min-h-0">
-            {/* Editable prompt */}
-            <div>
-              <p className="text-xs font-medium text-stone-500 mb-1.5">Prompt</p>
-              <textarea
-                rows={4}
-                value={overridePrompt}
-                onChange={(e) => setOverridePrompt(e.target.value)}
-                placeholder="Describe the shot…"
-                className="w-full text-xs rounded-md border border-stone-200 bg-white px-2.5 py-1.5 resize-y focus:outline-none focus:ring-1 focus:ring-stone-400 text-stone-800 placeholder:text-stone-400"
-              />
-            </div>
-
-            {/* Variation chips */}
-            {SHOT_VARIATION_GROUPS.map((group) => (
-              <div key={group.id}>
-                <p className="text-xs font-medium text-stone-500 mb-1.5">{group.label}</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {group.variations.map((v) => {
-                    const isActive = selected.includes(v.prompt);
-                    const isDisabled = !isActive && selected.length >= MAX_SELECTED;
-                    return (
-                      <button
-                        key={v.id}
-                        type="button"
-                        disabled={isDisabled}
-                        onClick={() => toggleVariation(v.prompt)}
-                        className={`px-2 py-0.5 rounded-full text-xs border transition-colors ${
-                          isActive
-                            ? 'bg-stone-900 text-white border-stone-900'
-                            : isDisabled
-                              ? 'bg-stone-50 text-stone-300 border-stone-200 cursor-not-allowed'
-                              : 'bg-white text-stone-700 border-stone-200 hover:border-stone-400 hover:text-stone-900'
-                        }`}
-                      >
-                        {v.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-
-            {/* Live Director's note preview */}
-            {directorNotePreview && (
-              <div className="rounded-md bg-stone-50 border border-stone-100 px-2.5 py-2">
-                <p className="text-xs text-stone-400 mb-0.5 font-medium">Director&apos;s note (will append)</p>
-                <p className="text-xs text-stone-600 italic">{directorNotePreview}</p>
-              </div>
-            )}
-
-            {/* Exclude entities from conditioning */}
-            {conditioningEntities.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-stone-500 mb-1.5">Remove from this frame</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {conditioningEntities.map((e) => {
-                    const isExcluded = excludedIds.has(e.id);
-                    return (
-                      <button
-                        key={e.id}
-                        type="button"
-                        onClick={() => toggleExclude(e.id)}
-                        title={isExcluded ? `Re-include ${e.name}` : `Exclude ${e.name} from conditioning`}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
-                          isExcluded
-                            ? 'bg-red-50 text-red-600 border-red-200 line-through'
-                            : 'bg-white text-stone-600 border-stone-200 hover:border-red-300 hover:text-red-600'
-                        }`}
-                      >
-                        {isExcluded && <X className="h-2.5 w-2.5 flex-shrink-0" />}
-                        {e.name}
-                      </button>
-                    );
-                  })}
-                </div>
-                {excludedIds.size > 0 && (
-                  <p className="text-xs text-stone-400 mt-1.5">Excluded entities won&apos;t be used as visual references for this frame.</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="p-3 border-t border-stone-100 flex items-center gap-2 flex-shrink-0">
-            <Button
-              size="sm"
-              className="flex-1"
-              onClick={() => { void regen(selected); }}
-            >
-              Regenerate
-            </Button>
-            <button
-              type="button"
-              onClick={() => { void regen([]); }}
-              className="text-xs text-stone-500 hover:text-stone-900 transition-colors px-2 py-1.5"
-            >
-              Just retry
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Popover — portalled to body so the card's overflow-hidden can't clip it */}
+      {typeof document !== 'undefined' && popover && createPortal(popover, document.body)}
     </div>
   );
 }
