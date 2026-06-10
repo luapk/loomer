@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
@@ -192,5 +193,16 @@ export async function POST(
     ? `No continuity issues detected across ${checkedShots} shots.`
     : `${allIssues.filter((i) => i.severity === 'error').length} error(s), ${allIssues.filter((i) => i.severity === 'warning').length} warning(s) found across ${checkedShots} shots.`;
 
-  return NextResponse.json({ issues: allIssues, checked_shots: checkedShots, summary } satisfies ContinuityCheckResult);
+  const result: ContinuityCheckResult = { issues: allIssues, checked_shots: checkedShots, summary };
+
+  // Persist so restored sessions show the report instead of silently never
+  // having checked. checked_at lets the client tell a stored report from none.
+  await getDb().storyboard.update({
+    where: { id },
+    data: {
+      continuity_report: { ...result, checked_at: new Date().toISOString() } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return NextResponse.json(result);
 }

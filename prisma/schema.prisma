@@ -21,6 +21,7 @@ model Storyboard {
   image_model       String?
   reference_stills  Json?
   shot_key_frames   Json?
+  continuity_report Json?
   created_at        DateTime         @default(now())
   updated_at      DateTime         @updatedAt
 
