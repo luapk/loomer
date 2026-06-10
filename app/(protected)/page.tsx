@@ -1635,8 +1635,8 @@ function HomePageInner() {
                   Download ZIP
                 </a>
               )}
-              {/* Camera arrows toggle */}
-              {'id' in state && shotsDone > 0 && (
+              {/* Camera arrows toggle — sketch mode only */}
+              {'id' in state && shotsDone > 0 && renderStyle === 'WATERCOLOUR_SKETCH' && (
                 <button
                   type="button"
                   onClick={() => setShowArrows((v) => !v)}
@@ -1712,8 +1712,8 @@ function HomePageInner() {
                       )}
                     </div>
                   )}
-                  {/* Camera movement arrows overlay */}
-                  {showArrows && frame?.status === 'done' && (
+                  {/* Camera movement arrows overlay — watercolour/sketch mode only */}
+                  {showArrows && renderStyle === 'WATERCOLOUR_SKETCH' && frame?.status === 'done' && (
                     <CameraArrows grammar={shot.grammar} />
                   )}
                   {/* Version history nav — shown when there are older renders */}
