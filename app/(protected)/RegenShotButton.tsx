@@ -17,7 +17,7 @@ interface Props {
   shotNumber: number;
   keyFramePrompt?: string;
   conditioningEntities?: EntityInfo[];
-  onSuccess: (url: string) => void;
+  onSuccess: (url: string, history?: string[]) => void;
 }
 
 export function RegenShotButton({
@@ -92,8 +92,8 @@ export function RegenShotButton({
         setError(data.error ?? 'Regeneration failed');
         return;
       }
-      const data = (await res.json()) as { url: string };
-      onSuccess(data.url);
+      const data = (await res.json()) as { url: string; history?: string[] };
+      onSuccess(data.url, data.history);
     } catch {
       setError('Network error — please try again');
     } finally {

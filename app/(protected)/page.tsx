@@ -7,9 +7,12 @@ import { Textarea } from '@/src/components/ui/textarea';
 import { Badge } from '@/src/components/ui/badge';
 import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
-  Camera, Paintbrush, Check, ImageIcon,
+  Camera, Paintbrush, Check, ImageIcon, Upload,
   Film, Download, ScanEye, Pencil, Bell, BellOff, X,
+  ChevronLeft, ChevronRight as ChevronRightIcon, Clapperboard,
 } from 'lucide-react';
+import { CameraArrows } from './CameraArrows';
+import { Animatic } from './Animatic';
 
 function toTitleCase(str: string): string {
   const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
@@ -27,8 +30,8 @@ import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
 import type { DevStats } from '@/src/components/dev-stats';
 import { RegenShotButton } from './RegenShotButton';
 
-type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH';
-type Tab = 'storyboard' | 'shots' | 'images' | 'boards';
+type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH' | 'STYLE_REF';
+type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'animatic';
 
 type State =
   | { phase: 'empty' }
@@ -148,6 +151,18 @@ function HomePageInner() {
   // Re-parse confirmation
   const [confirmingReparse, setConfirmingReparse] = useState(false);
 
+  // Camera movement arrows overlay (boards tab)
+  const [showArrows, setShowArrows] = useState(false);
+
+  // Shot version history — shotNumber → index of currently displayed history item
+  // 0 = current (latest), 1 = previous, 2 = two renders ago, …
+  const [shotHistoryIndex, setShotHistoryIndex] = useState<Record<string, number>>({});
+
+  // Style reference upload
+  const [styleRefUrl, setStyleRefUrl] = useState<string | null>(null);
+  const [styleRefUploading, setStyleRefUploading] = useState(false);
+  const styleRefInputRef = useRef<HTMLInputElement>(null);
+
   const [activeTab, setActiveTab] = useState<Tab>('storyboard');
 
   const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
@@ -205,11 +220,13 @@ function HomePageInner() {
         status: string;
         render_style: RenderStyle;
         image_model: string | null;
+        style_ref_url: string | null;
         reference_stills: unknown;
         shot_key_frames: unknown;
         continuity_report: unknown;
       }) => {
         if (data.render_style) setRenderStyle(data.render_style);
+        if (data.style_ref_url) setStyleRefUrl(data.style_ref_url);
         // Only restore the saved model if it's a known-good ID — stale records may
         // have the old non-existent 'gemini-2.0-flash-preview-image-generation' name.
         const KNOWN_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'];
@@ -568,6 +585,25 @@ function HomePageInner() {
   // quiet=true keeps the sync log closed unless something actually changed —
   // used by the automatic pre-generation sync, where "already in sync" is the
   // common case and shouldn't produce UI noise.
+  async function handleStyleRefUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !('id' in state)) return;
+    setStyleRefUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/storyboard/${state.id}/style-ref`, { method: 'POST', body: form });
+      if (res.ok) {
+        const data = await res.json() as { url: string };
+        setStyleRefUrl(data.url);
+        setRenderStyle('STYLE_REF');
+      }
+    } finally {
+      setStyleRefUploading(false);
+      if (styleRefInputRef.current) styleRefInputRef.current.value = '';
+    }
+  }
+
   async function syncPrompts(id: string, quiet = false) {
     setSyncingPrompts(true);
     setSyncLog([]);
@@ -939,6 +975,12 @@ function HomePageInner() {
       spinner: shotsGenerating,
       done: boardsComplete,
     },
+    {
+      id: 'animatic' as Tab,
+      label: 'Animatic',
+      enabled: boardsComplete,
+      done: false,
+    },
   ];
 
   return (
@@ -1086,18 +1128,24 @@ function HomePageInner() {
           {/* Style picker */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-stone-600">Visual style</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               {(
                 [
                   { value: 'PHOTOREAL' as const, icon: Camera, label: 'Photoreal', description: 'Matches your DP & film stock' },
                   { value: 'WATERCOLOUR_SKETCH' as const, icon: Paintbrush, label: 'Watercolour sketch', description: 'Pencil lines, muted watercolour wash' },
+                  { value: 'STYLE_REF' as const, icon: Upload, label: 'Style reference', description: 'Match uploaded image style' },
                 ] as const
               ).map(({ value, icon: Icon, label, description }) => {
                 const active = renderStyle === value;
                 return (
                   <button
                     key={value}
-                    onClick={() => setRenderStyle(value)}
+                    onClick={() => {
+                      setRenderStyle(value);
+                      if (value === 'STYLE_REF' && !styleRefUrl) {
+                        styleRefInputRef.current?.click();
+                      }
+                    }}
                     disabled={state.phase === 'generating_refs'}
                     className={`rounded-xl border p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                       active ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 hover:border-stone-300 bg-white'
@@ -1110,6 +1158,64 @@ function HomePageInner() {
                 );
               })}
             </div>
+            {/* Style reference upload area */}
+            <input
+              ref={styleRefInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => { void handleStyleRefUpload(e); }}
+            />
+            {renderStyle === 'STYLE_REF' && (
+              <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 space-y-2">
+                {styleRefUrl ? (
+                  <div className="flex items-start gap-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={styleRefUrl} alt="Style reference" className="w-16 h-16 object-cover rounded-lg flex-shrink-0" />
+                    <div className="flex-1 min-w-0 space-y-1.5">
+                      <p className="text-xs text-stone-600 font-medium">Style reference uploaded</p>
+                      <p className="text-xs text-stone-400">This image will guide the visual style of all generated frames.</p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => styleRefInputRef.current?.click()}
+                          disabled={styleRefUploading || state.phase === 'generating_refs'}
+                          className="text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
+                        >
+                          {styleRefUploading ? 'Uploading…' : 'Replace'}
+                        </button>
+                        <span className="text-stone-200">·</span>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!('id' in state)) return;
+                            await fetch(`/api/storyboard/${state.id}/style-ref`, { method: 'DELETE' });
+                            setStyleRefUrl(null);
+                            setRenderStyle('PHOTOREAL');
+                          }}
+                          disabled={state.phase === 'generating_refs'}
+                          className="text-xs text-red-500 hover:text-red-700 transition-colors disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => styleRefInputRef.current?.click()}
+                    disabled={styleRefUploading || state.phase === 'generating_refs'}
+                    className="w-full flex flex-col items-center gap-2 py-4 text-stone-400 hover:text-stone-600 transition-colors disabled:opacity-50"
+                  >
+                    {styleRefUploading
+                      ? <Loader2 className="h-5 w-5 animate-spin" />
+                      : <Upload className="h-5 w-5" />}
+                    <span className="text-xs">{styleRefUploading ? 'Uploading…' : 'Click to upload a style reference image'}</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Model picker */}
@@ -1529,6 +1635,22 @@ function HomePageInner() {
                   Download ZIP
                 </a>
               )}
+              {/* Camera arrows toggle */}
+              {'id' in state && shotsDone > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowArrows((v) => !v)}
+                  className={`flex items-center gap-1.5 text-xs border rounded-lg px-3 py-1.5 transition-colors ${
+                    showArrows
+                      ? 'bg-stone-900 text-white border-stone-900'
+                      : 'text-stone-600 border-stone-200 hover:bg-white/70 bg-white/40'
+                  }`}
+                  title="Toggle camera movement arrows"
+                >
+                  <Film className="h-3.5 w-3.5" />
+                  Arrows
+                </button>
+              )}
               {continuitySummary && !continuityChecking && (
                 <span className={`text-xs ${continuityIssues.length === 0 ? 'text-green-700' : 'text-amber-700'}`}>
                   {continuitySummary}
@@ -1555,14 +1677,21 @@ function HomePageInner() {
           {(state.parsedJson?.shots ?? []).map((shot: any) => {
             const n = String(shot.shot_number as number);
             const frame = shotKeyFrames[n];
+            // Version history — index 0 = current render, 1 = previous, etc.
+            const histIdx = shotHistoryIndex[n] ?? 0;
+            const allUrls = frame?.url
+              ? [frame.url, ...(frame.history ?? [])]
+              : (frame?.history ?? []);
+            const displayUrl = allUrls[histIdx] ?? null;
+            const hasHistory = allUrls.length > 1;
             return (
               <div key={n} className="glass rounded-xl overflow-hidden">
-                {/* Image area — relative so the regen button can be absolutely positioned */}
+                {/* Image area — relative so overlays can be absolutely positioned */}
                 <div className="relative">
-                  {frame?.status === 'done' && frame.url ? (
+                  {frame?.status === 'done' && displayUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={frame.url}
+                      src={displayUrl}
                       alt={`Shot ${n} — ${shot.descriptor as string}`}
                       className="w-full aspect-video object-cover"
                     />
@@ -1583,6 +1712,36 @@ function HomePageInner() {
                       )}
                     </div>
                   )}
+                  {/* Camera movement arrows overlay */}
+                  {showArrows && frame?.status === 'done' && (
+                    <CameraArrows grammar={shot.grammar} />
+                  )}
+                  {/* Version history nav — shown when there are older renders */}
+                  {hasHistory && frame?.status === 'done' && (
+                    <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 rounded-lg px-1.5 py-1">
+                      <button
+                        type="button"
+                        onClick={() => setShotHistoryIndex((prev) => ({ ...prev, [n]: Math.min((prev[n] ?? 0) + 1, allUrls.length - 1) }))}
+                        disabled={(shotHistoryIndex[n] ?? 0) >= allUrls.length - 1}
+                        className="text-white disabled:opacity-30 hover:text-stone-200 transition-colors"
+                        title="Older render"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <span className="text-white text-xs font-mono tabular-nums">
+                        {histIdx === 0 ? 'latest' : `−${histIdx}`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShotHistoryIndex((prev) => ({ ...prev, [n]: Math.max((prev[n] ?? 0) - 1, 0) }))}
+                        disabled={(shotHistoryIndex[n] ?? 0) === 0}
+                        className="text-white disabled:opacity-30 hover:text-stone-200 transition-colors"
+                        title="Newer render"
+                      >
+                        <ChevronRightIcon className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
                   {/* Regen button — only show once there is a frame (done or error) */}
                   {'id' in state && (frame?.status === 'done' || frame?.status === 'error') && (
                     <div className="absolute top-2 right-2">
@@ -1591,9 +1750,13 @@ function HomePageInner() {
                         shotNumber={shot.shot_number as number}
                         keyFramePrompt={shot.key_frame_prompt as string | undefined}
                         conditioningEntities={allParsedEntities.filter(e => Boolean(refStills[e.id]?.selected))}
-                        onSuccess={(url) => {
-                          setShotKeyFrames((prev) => ({ ...prev, [n]: { status: 'done', url } }));
-                          // Clear any continuity issues for this shot since it was regenerated
+                        onSuccess={(url, history) => {
+                          setShotKeyFrames((prev) => ({
+                            ...prev,
+                            [n]: { status: 'done', url, history: history ?? prev[n]?.history },
+                          }));
+                          // Reset to latest render and clear continuity issues
+                          setShotHistoryIndex((prev) => ({ ...prev, [n]: 0 }));
                           setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== (shot.shot_number as number)));
                         }}
                       />
@@ -1743,6 +1906,15 @@ function HomePageInner() {
         </div>
       )}
 
+
+      {/* Animatic tab */}
+      {activeTab === 'animatic' && 'parsedJson' in state && (
+        <Animatic
+          shots={state.parsedJson?.shots ?? []}
+          shotKeyFrames={shotKeyFrames}
+          storyboardTitle={'title' in state ? state.title : 'Untitled'}
+        />
+      )}
 
       {/* How It Works modal */}
       {showHowItWorks && (
