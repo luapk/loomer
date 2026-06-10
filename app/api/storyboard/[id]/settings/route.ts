@@ -5,7 +5,7 @@ import { getDb } from '@/src/lib/db';
 export const dynamic = 'force-dynamic';
 
 const BodySchema = z.object({
-  render_style: z.enum(['PHOTOREAL', 'WATERCOLOUR_SKETCH']),
+  render_style: z.enum(['PHOTOREAL', 'WATERCOLOUR_SKETCH', 'STYLE_REF']),
   image_model: z.string().min(1),
 });
 
