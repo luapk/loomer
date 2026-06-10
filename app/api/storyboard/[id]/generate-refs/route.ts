@@ -186,11 +186,11 @@ export async function POST(
       try {
         send({ type: 'start', total: entitiesToGenerate.length });
 
-        // Process entities SEQUENTIALLY (one at a time) to avoid rate limits.
-        // Within each entity, 2 candidates run in parallel — just 2 concurrent
-        // calls at any moment, no quota pressure.
-        for (let i = 0; i < entitiesToGenerate.length; i++) {
-          const entity = entitiesToGenerate[i]!;
+        // Process up to 3 entities concurrently (6 Gemini calls max in flight).
+        // generateOneImage already retries on 429 with backoff, so transient
+        // rate-limit pressure degrades gracefully rather than failing the run.
+        const ENTITY_CONCURRENCY = 3;
+        const processEntity = async (entity: RefEntity, i: number) => {
           const entityStart = Date.now();
           send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entitiesToGenerate.length });
 
@@ -245,7 +245,18 @@ export async function POST(
             await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
             send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
           }
-        }
+        };
+
+        // Simple worker pool: ENTITY_CONCURRENCY workers pull from a shared index.
+        let nextIndex = 0;
+        await Promise.all(
+          Array.from({ length: Math.min(ENTITY_CONCURRENCY, entitiesToGenerate.length) }, async () => {
+            while (nextIndex < entitiesToGenerate.length) {
+              const i = nextIndex++;
+              await processEntity(entitiesToGenerate[i]!, i);
+            }
+          }),
+        );
 
         await getDb().storyboard.update({ where: { id }, data: { status: 'REFS_PENDING' } });
         send({ type: 'done', total: entitiesToGenerate.length });
