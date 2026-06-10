@@ -18,9 +18,11 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import {
   ParsedStoryboardSchema,
+  ShotSchema,
   type ParsedStoryboard,
 } from '../schema/storyboard';
 import { PARSER_SYSTEM_PROMPT } from '../prompts/parser-system';
@@ -68,10 +70,35 @@ const TOOL_NAME = 'parse_storyboard';
 const TOOL_DESCRIPTION =
   'Extract structured data from a storyboard markdown document. Always call this tool with the full extraction as input. Do not respond in prose.';
 
+// Chunked parallel parse: shots are independent `### Shot NN` markdown blocks,
+// so they can be extracted in parallel calls and compiled — wall time becomes
+// ~max(one chunk) instead of sum(all shots). Globals (title, style lock,
+// bible, audit) are extracted in one call alongside the shot chunks.
+const SHOTS_PER_CHUNK = 5;
+// Below this many shots, a single call is fast enough that chunking overhead
+// (N× input tokens, compile step) isn't worth it.
+const CHUNK_THRESHOLD = 8;
+
 /**
  * Parse a storyboard markdown document into a validated ParsedStoryboard.
+ * Dispatches to the chunked parallel parser for longer storyboards.
  */
 export async function parseStoryboard(
+  markdown: string,
+  options: ParseOptions = {},
+): Promise<ParseResult> {
+  const split = splitMarkdownIntoSections(markdown);
+  if (split && split.shotBlocks.length >= CHUNK_THRESHOLD) {
+    return parseStoryboardChunked(split, options);
+  }
+  return parseStoryboardSingle(markdown, options);
+}
+
+/**
+ * Single-call parse — the original path, still used for short storyboards
+ * and as the format-fallback when the markdown has no `### Shot` headings.
+ */
+async function parseStoryboardSingle(
   markdown: string,
   options: ParseOptions = {},
 ): Promise<ParseResult> {
@@ -224,6 +251,299 @@ export async function parseStoryboard(
       input_tokens: totalInputTokens,
       output_tokens: totalOutputTokens,
       estimated_cost_usd: (totalInputTokens * 3 + totalOutputTokens * 15) / 1_000_000,
+      duration_ms: Date.now() - startTime,
+    },
+  };
+}
+
+// ============================================================================
+// Chunked parallel parse
+// ============================================================================
+
+interface MarkdownSections {
+  /** Header (title, narrative arc, style lock, bible, shot summary) + trailing audit. */
+  globals: string;
+  /** One markdown block per shot, in document order. */
+  shotBlocks: string[];
+}
+
+/**
+ * Split the storyboard markdown at `### Shot` headings. Returns null when the
+ * document doesn't follow the skill's output template (caller falls back to
+ * the single-call parser).
+ */
+function splitMarkdownIntoSections(markdown: string): MarkdownSections | null {
+  const headingRe = /^###\s+Shot\s/gim;
+  const indices: number[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = headingRe.exec(markdown)) !== null) {
+    indices.push(match.index);
+  }
+  if (indices.length === 0) return null;
+
+  const header = markdown.slice(0, indices[0]!);
+  const shotBlocks: string[] = [];
+  for (let i = 0; i < indices.length; i++) {
+    const end = i + 1 < indices.length ? indices[i + 1]! : markdown.length;
+    shotBlocks.push(markdown.slice(indices[i]!, end));
+  }
+
+  // The followability audit is an H2 section trailing the last shot block —
+  // move it into globals so the audit extraction sees it.
+  const last = shotBlocks[shotBlocks.length - 1]!;
+  const auditMatch = /\n##\s+[^#]/.exec(last);
+  let audit = '';
+  if (auditMatch) {
+    audit = last.slice(auditMatch.index);
+    shotBlocks[shotBlocks.length - 1] = last.slice(0, auditMatch.index);
+  }
+
+  return { globals: `${header}\n${audit}`, shotBlocks };
+}
+
+// Schema subsets for the two extraction call shapes.
+const GlobalsSchema = ParsedStoryboardSchema.omit({ shots: true });
+const ShotsChunkSchema = z.object({
+  shots: z.array(ShotSchema).describe('All shots present in the provided markdown, in order.'),
+});
+
+/**
+ * One extraction call with a validation-correction retry. Throws with the
+ * accumulated Zod errors when both attempts fail.
+ */
+async function runExtraction<T>(
+  client: Anthropic,
+  model: string,
+  maxTokens: number,
+  toolName: string,
+  inputSchema: Record<string, unknown>,
+  schema: z.ZodType<T>,
+  userContent: string,
+  onChars?: (chars: number) => void,
+): Promise<{ data: T; inputTokens: number; outputTokens: number }> {
+  const tools: Anthropic.Beta.PromptCaching.PromptCachingBetaTool[] = [
+    {
+      name: toolName,
+      description: TOOL_DESCRIPTION,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- JSON schema shape varies
+      input_schema: inputSchema as any,
+    },
+  ];
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let response: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage | undefined;
+  let rawExtraction: unknown;
+  let lastErrors: string[] = [];
+
+  const MAX_ATTEMPTS = 2;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const messages: Anthropic.Beta.PromptCaching.PromptCachingBetaMessageParam[] =
+      attempt === 1 || !response
+        ? [{ role: 'user', content: userContent }]
+        : buildGenericCorrectionMessages(userContent, toolName, response, rawExtraction, lastErrors);
+
+    const messageStream = client.beta.promptCaching.messages.stream({
+      model,
+      max_tokens: maxTokens,
+      system: [{ type: 'text', text: PARSER_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      tools,
+      tool_choice: { type: 'tool', name: toolName },
+      messages,
+    });
+
+    if (attempt === 1 && onChars) {
+      let charsGenerated = 0;
+      messageStream.on('inputJson', (partialJson) => {
+        charsGenerated += partialJson.length;
+        onChars(charsGenerated);
+      });
+    }
+
+    response = await messageStream.finalMessage();
+    inputTokens += response.usage.input_tokens;
+    outputTokens += response.usage.output_tokens;
+
+    const toolUseBlock = response.content.find(
+      (block) => block.type === 'tool_use' && block.name === toolName,
+    );
+    if (!toolUseBlock || toolUseBlock.type !== 'tool_use') {
+      lastErrors = [`No tool_use block in response for ${toolName}`];
+      continue;
+    }
+    rawExtraction = toolUseBlock.input;
+
+    const result = schema.safeParse(rawExtraction);
+    if (result.success) {
+      return { data: result.data, inputTokens, outputTokens };
+    }
+    lastErrors = result.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`);
+  }
+
+  throw new Error(`${toolName} failed validation after retry: ${lastErrors.join('; ')}`);
+}
+
+function buildGenericCorrectionMessages(
+  userContent: string,
+  toolName: string,
+  firstResponse: Anthropic.Beta.PromptCaching.PromptCachingBetaMessage,
+  rawExtraction: unknown,
+  errors: string[],
+): Anthropic.Beta.PromptCaching.PromptCachingBetaMessageParam[] {
+  const toolUseBlock = firstResponse.content.find(
+    (block) => block.type === 'tool_use' && block.name === toolName,
+  );
+  const toolUseId = (toolUseBlock && toolUseBlock.type === 'tool_use') ? toolUseBlock.id : 'tool_0';
+  return [
+    { role: 'user', content: userContent },
+    {
+      role: 'assistant',
+      content: [{ type: 'tool_use', id: toolUseId, name: toolName, input: rawExtraction as Record<string, unknown> }],
+    },
+    {
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: `Schema validation failed. Please call the tool again with corrections.\n\nErrors:\n${errors.map((e) => `- ${e}`).join('\n')}\n\nCommon cause: a field that should be an object was returned as a string.`,
+      }],
+    },
+  ];
+}
+
+/**
+ * Parallel parse: one globals call + one call per chunk of shots, all
+ * in flight simultaneously, compiled and validated at the end.
+ */
+async function parseStoryboardChunked(
+  sections: MarkdownSections,
+  options: ParseOptions,
+): Promise<ParseResult> {
+  const startTime = Date.now();
+
+  const apiKey = options.apiKey ?? process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return failResult('ANTHROPIC_API_KEY not set', startTime);
+  }
+  const model = options.model ?? 'claude-haiku-4-5-20251001';
+  const verbose = options.verbose ?? false;
+  const client = new Anthropic({ apiKey });
+
+  const globalsSchema = sanitizeJsonSchema(
+    zodToJsonSchema(GlobalsSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+  );
+  const chunkSchema = sanitizeJsonSchema(
+    zodToJsonSchema(ShotsChunkSchema, { target: 'jsonSchema7', $refStrategy: 'none' }),
+  );
+
+  // Build shot chunks.
+  const chunks: string[][] = [];
+  for (let i = 0; i < sections.shotBlocks.length; i += SHOTS_PER_CHUNK) {
+    chunks.push(sections.shotBlocks.slice(i, i + SHOTS_PER_CHUNK));
+  }
+
+  if (verbose) {
+    console.log(
+      `[parser] Chunked parse: ${sections.shotBlocks.length} shots in ${chunks.length} chunks + globals, all parallel`,
+    );
+  }
+
+  // Aggregate streaming progress across all parallel calls.
+  const charsPerCall = new Map<number, number>();
+  const reportProgress = options.onProgress
+    ? (callIdx: number) => (chars: number) => {
+        charsPerCall.set(callIdx, chars);
+        let total = 0;
+        for (const c of charsPerCall.values()) total += c;
+        options.onProgress!(total);
+      }
+    : () => undefined;
+
+  const globalsPromise = runExtraction(
+    client, model, 32000, 'parse_storyboard_globals', globalsSchema,
+    GlobalsSchema,
+    `Extract the storyboard metadata, style lock, continuity bible (characters, locations, props), and followability audit from this storyboard markdown. The per-shot blocks have been removed — do NOT extract shots.\n\n${sections.globals}`,
+    reportProgress(0),
+  );
+
+  const chunkPromises = chunks.map((chunk, i) =>
+    runExtraction(
+      client, model, 16000, 'parse_storyboard_shots', chunkSchema,
+      ShotsChunkSchema,
+      `This is an excerpt of a storyboard document containing ONLY per-shot blocks (the header, bible, and audit are being extracted separately). Extract every shot present below, following your key_frame_prompt and shot-numbering rules. Use the shot number from each block heading as shot_number — do NOT renumber from 1.\n\n${chunk.join('\n')}`,
+      reportProgress(i + 1),
+    ),
+  );
+
+  let globals: z.infer<typeof GlobalsSchema>;
+  let shotResults: Array<{ data: z.infer<typeof ShotsChunkSchema>; inputTokens: number; outputTokens: number }>;
+  let globalsUsage: { inputTokens: number; outputTokens: number };
+  try {
+    const [globalsResult, ...chunkResults] = await Promise.all([globalsPromise, ...chunkPromises]);
+    globals = globalsResult.data;
+    globalsUsage = globalsResult;
+    shotResults = chunkResults;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return failResult(`Chunked parse failed: ${message}`, startTime);
+  }
+
+  // Chunks were dispatched in document order and each preserves its internal
+  // order, so flatMap order IS the shot sequence. Renumber sequentially rather
+  // than trusting per-chunk shot_number — a chunk that locally renumbered an
+  // alphanumeric label (18A→18) can collide with numbers in later chunks.
+  const shots = shotResults
+    .flatMap((r) => r.data.shots)
+    .map((shot, i) => ({ ...shot, shot_number: i + 1 }));
+
+  const totalInputTokens = globalsUsage.inputTokens + shotResults.reduce((s, r) => s + r.inputTokens, 0);
+  const totalOutputTokens = globalsUsage.outputTokens + shotResults.reduce((s, r) => s + r.outputTokens, 0);
+
+  const assembled = { ...globals, shots };
+  const validated = ParsedStoryboardSchema.safeParse(assembled);
+  if (!validated.success) {
+    return {
+      success: false,
+      storyboard: null,
+      warnings: [],
+      errors: [
+        'Chunked parse compiled but failed final validation:',
+        ...validated.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
+      ],
+      raw_extraction: assembled,
+      usage: {
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+        estimated_cost_usd: (totalInputTokens * 1 + totalOutputTokens * 5) / 1_000_000,
+        duration_ms: Date.now() - startTime,
+      },
+    };
+  }
+
+  const storyboard = validated.data;
+  const warnings = runIntegrityChecks(storyboard);
+
+  if (verbose) {
+    console.log(
+      `[parser] Chunked parse done: ${storyboard.total_shots} shots, ` +
+        `${storyboard.characters.length} characters in ${Date.now() - startTime}ms`,
+    );
+    if (warnings.length > 0) {
+      console.log(`[parser] ${warnings.length} integrity warnings`);
+    }
+  }
+
+  return {
+    success: true,
+    storyboard,
+    warnings,
+    errors: [],
+    raw_extraction: assembled,
+    usage: {
+      input_tokens: totalInputTokens,
+      output_tokens: totalOutputTokens,
+      // Haiku 4.5 pricing: $1/M input, $5/M output
+      estimated_cost_usd: (totalInputTokens * 1 + totalOutputTokens * 5) / 1_000_000,
       duration_ms: Date.now() - startTime,
     },
   };
