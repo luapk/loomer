@@ -28,6 +28,7 @@ export function RegenShotButton({
   onSuccess,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [overridePrompt, setOverridePrompt] = useState('');
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
@@ -35,12 +36,16 @@ export function RegenShotButton({
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Reset and pre-populate when popover opens
+  // Reset and pre-populate when popover opens; detect whether to open upward.
   useEffect(() => {
     if (open) {
       setOverridePrompt(keyFramePrompt ?? '');
       setExcludedIds(new Set());
       setSelected([]);
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        setOpenUpward(window.innerHeight - rect.bottom < 420);
+      }
     }
   }, [open, keyFramePrompt]);
 
@@ -137,7 +142,7 @@ export function RegenShotButton({
 
       {/* Popover */}
       {open && (
-        <div className="absolute right-0 top-8 z-50 w-80 rounded-xl border border-stone-200 bg-white shadow-xl flex flex-col max-h-[min(560px,85vh)]">
+        <div className={`absolute right-0 z-50 w-80 rounded-xl border border-stone-200 bg-white shadow-xl flex flex-col max-h-[min(560px,85vh)] ${openUpward ? 'bottom-8' : 'top-8'}`}>
           <div className="p-3 border-b border-stone-100 flex-shrink-0">
             <p className="text-xs font-semibold text-stone-900">Regenerate shot</p>
             <p className="text-xs text-stone-400 mt-0.5">Edit the prompt, pick variations, or just retry.</p>

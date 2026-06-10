@@ -228,6 +228,23 @@ export async function POST(
   for (const l of parsed.locations) entityNames[l.id] = l.name;
   for (const p of parsed.props) entityNames[p.id] = p.name;
 
+  // Build IP-safe visual labels for conditioning — use reference_still_prompt excerpts
+  // so known brand/franchise names (e.g. "Wolverine", "Sabretooth") never appear in
+  // the conditioning label text sent to the image model.
+  const entityVisualLabels: Record<string, string> = {};
+  for (const c of parsed.characters) {
+    const excerpt = c.reference_still_prompt.split(/[.!?]/)[0]?.trim() ?? '';
+    entityVisualLabels[c.id] = excerpt.length > 10 ? excerpt : c.reference_still_prompt.slice(0, 100);
+  }
+  for (const l of parsed.locations) {
+    const excerpt = l.reference_still_prompt.split(/[.!?]/)[0]?.trim() ?? '';
+    entityVisualLabels[l.id] = excerpt.length > 10 ? excerpt : l.reference_still_prompt.slice(0, 100);
+  }
+  for (const p of parsed.props) {
+    // Prop names are generally safe (e.g. "crimson kite") — use them directly.
+    entityVisualLabels[p.id] = p.name;
+  }
+
   // Build prompt — use override text if provided, otherwise the storyboard key frame prompt.
   // Style prefix always comes first; Director's note variations are appended regardless.
   const keyFrameText = overridePrompt?.trim() ? overridePrompt.trim() : shot.key_frame_prompt;
@@ -274,7 +291,7 @@ export async function POST(
     .filter((entityId) => !excluded.has(entityId))
     .map((entityId) => {
       const url = selectedRefUrl(entityId);
-      return url ? { name: entityNames[entityId] ?? entityId, url } : null;
+      return url ? { name: entityVisualLabels[entityId] ?? entityNames[entityId] ?? entityId, url } : null;
     })
     .filter((e): e is { name: string; url: string } => e !== null);
 
@@ -282,7 +299,7 @@ export async function POST(
     .filter((p) => !continuityIds.has(p.id) && !excluded.has(p.id))
     .map((p) => {
       const url = selectedRefUrl(p.id);
-      return url ? { name: p.name, url } : null;
+      return url ? { name: entityVisualLabels[p.id] ?? p.name, url } : null;
     })
     .filter((e): e is { name: string; url: string } => e !== null);
 

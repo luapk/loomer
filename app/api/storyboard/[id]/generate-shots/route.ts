@@ -280,6 +280,22 @@ export async function POST(
   for (const l of parsed.locations) entityNames[l.id] = l.name;
   for (const p of parsed.props) entityNames[p.id] = p.name;
 
+  // IP-safe visual labels — use reference_still_prompt excerpts so known brand /
+  // franchise names (e.g. "Wolverine", "Sabretooth") never appear in the label
+  // text sent to the image model.
+  const entityVisualLabels: Record<string, string> = {};
+  for (const c of parsed.characters) {
+    const excerpt = c.reference_still_prompt.split(/[.!?]/)[0]?.trim() ?? '';
+    entityVisualLabels[c.id] = excerpt.length > 10 ? excerpt : c.reference_still_prompt.slice(0, 100);
+  }
+  for (const l of parsed.locations) {
+    const excerpt = l.reference_still_prompt.split(/[.!?]/)[0]?.trim() ?? '';
+    entityVisualLabels[l.id] = excerpt.length > 10 ? excerpt : l.reference_still_prompt.slice(0, 100);
+  }
+  for (const p of parsed.props) {
+    entityVisualLabels[p.id] = p.name;
+  }
+
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });
   const runId = Date.now();
@@ -376,7 +392,7 @@ export async function POST(
                 const primaryEntities = [...continuityIds]
                   .map((entityId) => {
                     const img = cachedImage(entityId);
-                    return img ? { name: entityNames[entityId] ?? entityId, img } : null;
+                    return img ? { name: entityVisualLabels[entityId] ?? entityNames[entityId] ?? entityId, img } : null;
                   })
                   .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e !== null);
 
@@ -388,7 +404,7 @@ export async function POST(
                   .filter((p) => !continuityIds.has(p.id))
                   .map((p) => {
                     const img = cachedImage(p.id);
-                    return img ? { name: p.name, img } : null;
+                    return img ? { name: entityVisualLabels[p.id] ?? p.name, img } : null;
                   })
                   .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e !== null);
 
