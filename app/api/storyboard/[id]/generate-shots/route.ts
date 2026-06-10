@@ -40,20 +40,35 @@ const SINGLE_FRAME_GUARD =
   'If the description below mentions a "match cut", "intercut", "meanwhile", or another shot/timeline, ' +
   'ignore that editorial language entirely and depict ONLY this one shot\'s frozen moment.';
 
+// Restates the shot's cinematic grammar as the compositional authority, so
+// framing decisions come from the storyboard skill's grammar — not from the
+// perspective/geometry of whichever reference image happens to be attached.
+function buildGrammarLine(grammar: ParsedStoryboard['shots'][number]['grammar']): string {
+  const bits = [
+    `shot size ${grammar.scale}`,
+    `camera angle ${grammar.angle}`,
+    `lens ${grammar.lens}`,
+    `screen direction ${grammar.screen_direction}`,
+  ];
+  return `CAMERA GRAMMAR (authoritative — the frame's composition, perspective, and camera placement MUST follow this, never the geometry of any reference image): ${bits.join(', ')}.`;
+}
+
 function buildShotPrompt(
   keyFramePrompt: string,
   renderStyle: string,
   styleLock: ParsedStoryboard['style_lock'],
+  grammar?: ParsedStoryboard['shots'][number]['grammar'],
 ): string {
+  const grammarLine = grammar ? `${buildGrammarLine(grammar)}\n\n` : '';
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${SINGLE_FRAME_GUARD}\n\nStyle: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
+    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${SINGLE_FRAME_GUARD}\n\nStyle: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
 }
 
 // Returns a terse style declaration placed BEFORE reference images so the model
@@ -128,17 +143,16 @@ async function generateOneShot(
   model: string,
   prompt: string,
   styleDeclaration: string,
-  conditioningEntities: { name: string; url: string }[],
+  // Conditioning images are prefetched once per run (not per shot) and passed
+  // in already loaded — see the imageCache in the route handler.
+  conditioningEntities: { name: string; img: { data: string; mimeType: string } }[],
   // prevFrameUrl is only used in WATERCOLOUR_SKETCH mode. In photoreal mode the
   // output medium matches the prevFrame medium, so Gemini composites the content
   // rather than reading it as a spatial reference. The style mismatch in
   // watercolour mode acts as a natural barrier against this.
   prevFrameUrl: string | null,
 ): Promise<{ data: string; mimeType: string } | null> {
-  const [prevFrameResult, ...entityResults] = await Promise.all([
-    prevFrameUrl ? fetchImageAsBase64(prevFrameUrl) : Promise.resolve(null),
-    ...conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
-  ]);
+  const prevFrameResult = prevFrameUrl ? await fetchImageAsBase64(prevFrameUrl) : null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
@@ -156,13 +170,9 @@ async function generateOneShot(
   }
 
   // Named identity references.
-  const loadedEntities = conditioningEntities
-    .map((e, i) => ({ name: e.name, img: entityResults[i] ?? null }))
-    .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e.img !== null);
-
-  if (loadedEntities.length > 0) {
+  if (conditioningEntities.length > 0) {
     parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define ONLY the visual appearance of each entity — its shape, colour, texture, materials, and distinguishing features. Extract this visual identity and render it in the OUTPUT STYLE declared above. DO NOT copy the spatial position, orientation, camera angle, perspective geometry, or compositional arrangement from any reference image. The shot description governs ALL composition — where entities are placed, which direction they face, how the camera frames the scene. References answer "what does it look like?" only; the shot prompt answers "how is the scene composed?". DISREGARD any colour, material, or appearance adjective in the prompt text for these entities — the reference image overrides it. Do NOT copy the photographic medium of the references.]' });
-    for (const { name, img } of loadedEntities) {
+    for (const { name, img } of conditioningEntities) {
       const labelName = name.split(/\s[—–]\s/)[0]?.trim() ?? name;
       parts.push({ text: `[Reference — ${labelName}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
@@ -280,6 +290,36 @@ export async function POST(
       try {
         send({ type: 'start', total: parsed.shots.length });
 
+        // Prefetch every selected reference image ONCE for the whole run.
+        // Previously each shot re-fetched all of its conditioning images
+        // (~entities × shots redundant fetches), and a failed fetch silently
+        // dropped the entity's identity reference with no warning.
+        const imageCache = new Map<string, { data: string; mimeType: string } | null>();
+        const allRefUrls = new Set<string>();
+        for (const entityId of Object.keys(entityNames)) {
+          const url = selectedRefUrl(entityId);
+          if (url) allRefUrls.add(url);
+        }
+        await Promise.all(
+          [...allRefUrls].map(async (url) => {
+            imageCache.set(url, await fetchImageAsBase64(url));
+          }),
+        );
+        for (const entityId of Object.keys(entityNames)) {
+          const url = selectedRefUrl(entityId);
+          if (url && imageCache.get(url) === null) {
+            send({
+              type: 'ref_warning',
+              entityId,
+              message: `Reference image for ${entityNames[entityId]} could not be loaded — shots will generate without it.`,
+            });
+          }
+        }
+        const cachedImage = (entityId: string): { data: string; mimeType: string } | null => {
+          const url = selectedRefUrl(entityId);
+          return url ? (imageCache.get(url) ?? null) : null;
+        };
+
         // Scenes run in parallel; shots within a scene run sequentially so each
         // shot can receive the previous rendered frame for spatial continuity.
         // A scene boundary (different location_id) guarantees prevFrame is never
@@ -303,7 +343,7 @@ export async function POST(
               });
 
               try {
-                const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock);
+                const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock, shot.grammar);
                 const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
 
                 // Primary: entities explicitly in this shot's continuity.
@@ -315,10 +355,10 @@ export async function POST(
                 ]);
                 const primaryEntities = [...continuityIds]
                   .map((entityId) => {
-                    const url = selectedRefUrl(entityId);
-                    return url ? { name: entityNames[entityId] ?? entityId, url } : null;
+                    const img = cachedImage(entityId);
+                    return img ? { name: entityNames[entityId] ?? entityId, img } : null;
                   })
-                  .filter((e): e is { name: string; url: string } => e !== null);
+                  .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e !== null);
 
                 // Secondary: props with an approved ref that aren't in this shot's
                 // explicit continuity (packshots, hero products, always-present items).
@@ -327,10 +367,10 @@ export async function POST(
                 const secondaryEntities = parsed.props
                   .filter((p) => !continuityIds.has(p.id))
                   .map((p) => {
-                    const url = selectedRefUrl(p.id);
-                    return url ? { name: p.name, url } : null;
+                    const img = cachedImage(p.id);
+                    return img ? { name: p.name, img } : null;
                   })
-                  .filter((e): e is { name: string; url: string } => e !== null);
+                  .filter((e): e is { name: string; img: { data: string; mimeType: string } } => e !== null);
 
                 const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
