@@ -26,10 +26,17 @@ function buildPrompt(
   entity: RefEntity,
   renderStyle: string,
   styleLock: ParsedStoryboard['style_lock'],
+  styleRefDescription?: string,
 ): string {
   const base = entity.reference_still_prompt;
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `${REF_PREAMBLE}\n\nStyle: ${WATERCOLOUR_STYLE}\n\n${base}`;
+  }
+  if (renderStyle === 'STYLE_REF') {
+    const styleNote = styleRefDescription
+      ? `Match the visual style of the provided style reference image (${styleRefDescription}).`
+      : 'Match the visual style of the provided style reference image.';
+    return `${REF_PREAMBLE}\n\nStyle: ${styleNote}\n\n${base}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
@@ -39,6 +46,22 @@ function buildPrompt(
   return `${REF_PREAMBLE}\n\nStyle: ${styleParts.join(' ')}\n\n${base}`;
 }
 
+async function fetchImageAsBase64(
+  url: string,
+): Promise<{ data: string; mimeType: string } | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+    const mimeType = contentType.split(';')[0]?.trim() ?? 'image/jpeg';
+    const arrayBuffer = await res.arrayBuffer();
+    const data = Buffer.from(arrayBuffer).toString('base64');
+    return { data, mimeType };
+  } catch {
+    return null;
+  }
+}
+
 // Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
 // Returns base64 bytes + mime type, or null if the response contains no image part.
 // Returns image data, or throws a descriptive error explaining why no image was produced.
@@ -46,15 +69,28 @@ async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
+  // styleRefImage is passed as the first conditioning part in STYLE_REF mode.
+  styleRefImage: { data: string; mimeType: string } | null = null,
 ): Promise<{ data: string; mimeType: string }> {
   const delays = [5000, 15000, 30000];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
+  const contents: any = styleRefImage
+    ? [{
+        role: 'user',
+        parts: [
+          { text: '[STYLE REFERENCE: Match this visual style exactly — colour palette, lighting, rendering technique, texture. Do NOT copy any subject, character, or composition from it.]' },
+          { inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } },
+          { text: prompt },
+        ],
+      }]
+    : prompt;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
       // IMAGE-only modality prevents Gemini from producing annotated
       // storyboard-style frames with text overlays burned into the image.
       const response = await ai.models.generateContent({
         model,
-        contents: prompt,
+        contents,
         config: { responseModalities: [Modality.IMAGE] },
       });
       const candidate = response.candidates?.[0];
@@ -135,6 +171,12 @@ export async function POST(
   const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
   const renderStyle = storyboard.render_style;
 
+  // For STYLE_REF mode, fetch the style reference image once to be injected
+  // as a conditioning image alongside every entity prompt.
+  const styleRefImage = renderStyle === 'STYLE_REF' && storyboard.style_ref_url
+    ? await fetchImageAsBase64(storyboard.style_ref_url)
+    : null;
+
   const entities: RefEntity[] = [
     ...parsed.characters.map((c) => ({
       id: c.id, name: c.name, type: 'character' as const,
@@ -204,7 +246,7 @@ export async function POST(
             // calls max) that rate limiting is not a concern.
             const candidateResults = await Promise.allSettled(
               [0, 1].map(async (j) => {
-                const img = await generateOneImage(ai, model, prompt);
+                const img = await generateOneImage(ai, model, prompt, styleRefImage);
                 const url = await uploadCandidate(id, entity.id, j, img, runId);
                 send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
                 return url;

@@ -18,6 +18,7 @@ export type ShotKeyFrames = Record<
   {
     status: 'pending' | 'generating' | 'done' | 'error';
     url: string | null;
+    history?: string[]; // previous render URLs, newest-first
     error?: string;
   }
 >;
@@ -63,6 +64,11 @@ function buildShotPrompt(
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
   }
+  if (renderStyle === 'STYLE_REF') {
+    // Style declaration is handled via a conditioning image; the prompt just
+    // carries the grammar guard and key-frame description.
+    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${keyFramePrompt}`;
+  }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
@@ -73,12 +79,16 @@ function buildShotPrompt(
 
 // Returns a terse style declaration placed BEFORE reference images so the model
 // anchors to the output medium before it sees any photographic references.
+// STYLE_REF mode uses a conditioning image for style — see generateOneShot.
 function buildStyleDeclaration(
   renderStyle: string,
   styleLock: ParsedStoryboard['style_lock'],
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  }
+  if (renderStyle === 'STYLE_REF') {
+    return 'OUTPUT STYLE (mandatory): Match the visual style of the STYLE REFERENCE image provided — reproduce its colour palette, lighting quality, rendering technique, texture, and overall aesthetic. Every element in the output MUST match this style.';
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
@@ -151,6 +161,9 @@ async function generateOneShot(
   // rather than reading it as a spatial reference. The style mismatch in
   // watercolour mode acts as a natural barrier against this.
   prevFrameUrl: string | null,
+  // styleRefImage is used in STYLE_REF mode — injected first as a style-only
+  // conditioning image before any identity references.
+  styleRefImage: { data: string; mimeType: string } | null = null,
 ): Promise<{ data: string; mimeType: string } | null> {
   const prevFrameResult = prevFrameUrl ? await fetchImageAsBase64(prevFrameUrl) : null;
 
@@ -160,6 +173,13 @@ async function generateOneShot(
   // Style declaration comes FIRST — before any images — so the model anchors to
   // the output medium before it sees photographic references.
   parts.push({ text: styleDeclaration });
+
+  // Style reference image (STYLE_REF mode) — injected immediately after the
+  // style declaration so the medium is locked before identity refs are shown.
+  if (styleRefImage) {
+    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. This image defines the output medium — do NOT copy any characters, objects, locations, or composition from it.]' });
+    parts.push({ inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } });
+  }
 
   // Spatial continuity reference — only used in watercolour mode where the
   // pencil-sketch output style is sufficiently different from a photographic
@@ -253,6 +273,11 @@ export async function POST(
   const refStills = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
+
+  // Fetch style reference image once for STYLE_REF mode.
+  const styleRefImage = renderStyle === 'STYLE_REF' && storyboard.style_ref_url
+    ? await fetchImageAsBase64(storyboard.style_ref_url)
+    : null;
 
   // Build entity name lookup for labelled conditioning
   const entityNames: Record<string, string> = {};
@@ -378,7 +403,7 @@ export async function POST(
                 // in photoreal mode Gemini composites the image content rather than
                 // reading it as a spatial reference.
                 const prevFrameForShot = renderStyle === 'WATERCOLOUR_SKETCH' ? prevShotUrl : null;
-                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevFrameForShot);
+                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevFrameForShot, styleRefImage);
 
                 if (!img) {
                   const durationMs = Date.now() - shotStart;
@@ -401,7 +426,12 @@ export async function POST(
                 );
 
                 const durationMs = Date.now() - shotStart;
-                shotKeyFrames[shotKey] = { status: 'done', url: blob.url };
+                // Preserve any previous render URL in the history stack (newest-first).
+                const prev = shotKeyFrames[shotKey];
+                const prevUrl = prev?.url;
+                const prevHistory = prev?.history ?? [];
+                const history = prevUrl ? [prevUrl, ...prevHistory].slice(0, 10) : prevHistory;
+                shotKeyFrames[shotKey] = { status: 'done', url: blob.url, history };
                 await getDb().storyboard.update({
                   where: { id },
                   data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },

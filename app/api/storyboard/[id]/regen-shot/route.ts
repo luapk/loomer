@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
+import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -101,6 +102,8 @@ async function generateOneShot(
   prompt: string,
   styleDeclaration: string,
   conditioningEntities: { name: string; url: string }[],
+  _prevFrameResult: null = null,
+  styleRefImage: { data: string; mimeType: string } | null = null,
 ): Promise<{ data: string; mimeType: string } | null> {
   const entityResults = await Promise.all(
     conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
@@ -116,6 +119,12 @@ async function generateOneShot(
   // Style declaration first — anchors the output medium before the model sees
   // any photographic reference images.
   parts.push({ text: styleDeclaration });
+
+  // Style reference image (STYLE_REF mode) — injected after the style declaration.
+  if (styleRefImage) {
+    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. This image defines the output medium — do NOT copy any characters, objects, locations, or composition from it.]' });
+    parts.push({ inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } });
+  }
 
   if (loadedEntities.length > 0) {
     parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define ONLY the visual appearance of each entity — its shape, colour, texture, materials, and distinguishing features. Extract this visual identity and render it in the OUTPUT STYLE declared above. DO NOT copy the spatial position, orientation, camera angle, perspective geometry, or compositional arrangement from any reference image. The shot description governs ALL composition — where entities are placed, which direction they face, how the camera frames the scene. References answer "what does it look like?" only; the shot prompt answers "how is the scene composed?". DISREGARD any colour, material, or appearance adjective in the prompt text for these entities — the reference image overrides it. Do NOT copy the photographic medium of the references.]' });
@@ -287,9 +296,14 @@ export async function POST(
   const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
   const ai = new GoogleGenAI({ apiKey });
 
+  // Fetch style reference image once for STYLE_REF mode.
+  const styleRefImage = renderStyle === 'STYLE_REF' && storyboard.style_ref_url
+    ? await fetchImageAsBase64(storyboard.style_ref_url)
+    : null;
+
   let img: { data: string; mimeType: string } | null;
   try {
-    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities);
+    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, null, styleRefImage);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: `Image generation failed: ${message}` }, { status: 502 });
@@ -305,19 +319,20 @@ export async function POST(
 
   const blob = await put(blobPath, buffer, { access: 'public', contentType: img.mimeType });
 
-  // Update shot_key_frames in DB.
-  const existing = (storyboard.shot_key_frames ?? {}) as Record<
-    string,
-    { status: string; url: string | null; error?: string }
-  >;
-  const updated = {
+  // Update shot_key_frames — push the previous render URL into history (newest-first).
+  const existing = (storyboard.shot_key_frames ?? {}) as ShotKeyFrames;
+  const prevEntry = existing[String(shotNumber)];
+  const prevUrl = prevEntry?.url ?? null;
+  const prevHistory = prevEntry?.history ?? [];
+  const history = prevUrl ? [prevUrl, ...prevHistory].slice(0, 10) : prevHistory;
+  const updated: ShotKeyFrames = {
     ...existing,
-    [String(shotNumber)]: { status: 'done', url: blob.url },
+    [String(shotNumber)]: { status: 'done', url: blob.url, history },
   };
   await getDb().storyboard.update({
     where: { id },
     data: { shot_key_frames: updated as unknown as Prisma.InputJsonValue },
   });
 
-  return NextResponse.json({ url: blob.url });
+  return NextResponse.json({ url: blob.url, history });
 }
