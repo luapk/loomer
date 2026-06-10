@@ -30,6 +30,11 @@ export type ShotKeyFrames = Record<
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
 
+const PHOTOREAL_ANCHOR =
+  'PHOTOREALISTIC PHOTOGRAPH. Real camera, real lens, real light, real materials. ' +
+  'NOT an illustration. NOT a painting. NOT a sketch. NOT watercolour. NOT digital art. NOT anime. NOT cartoon. ' +
+  'Naturalistic human anatomy — no exaggerated proportions, no illustrated features.';
+
 // Single-frame guard prepended to every shot prompt. A key_frame_prompt that
 // carries editorial cross-cut language ("match cut", "intercut", references to
 // a parallel timeline) makes Gemini render a diptych. This guard forces a
@@ -69,12 +74,12 @@ function buildShotPrompt(
     // carries the grammar guard and key-frame description.
     return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${keyFramePrompt}`;
   }
-  const styleParts = [styleLock.look];
+  const styleParts: string[] = [];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
 }
 
 // Returns a terse style declaration placed BEFORE reference images so the model
@@ -90,12 +95,12 @@ function buildStyleDeclaration(
   if (renderStyle === 'STYLE_REF') {
     return 'OUTPUT STYLE (mandatory): Match the visual style of the STYLE REFERENCE image provided — reproduce its colour palette, lighting quality, rendering technique, texture, and overall aesthetic. Every element in the output MUST match this style.';
   }
-  const styleParts = [styleLock.look];
+  const styleParts: string[] = [];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `OUTPUT STYLE (mandatory): ${styleParts.join(' ')} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
 }
 
 // ---------------------------------------------------------------------------

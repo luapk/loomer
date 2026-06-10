@@ -13,6 +13,11 @@ export const maxDuration = 300;
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art.';
 
+const PHOTOREAL_ANCHOR =
+  'PHOTOREALISTIC PHOTOGRAPH. Real camera, real lens, real light, real materials. ' +
+  'NOT an illustration. NOT a painting. NOT a sketch. NOT watercolour. NOT digital art. NOT anime. NOT cartoon. ' +
+  'Naturalistic human anatomy — no exaggerated proportions, no illustrated features.';
+
 function buildPrompt(
   basePrompt: string,
   renderStyle: string,
@@ -21,12 +26,12 @@ function buildPrompt(
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `Style: ${WATERCOLOUR_STYLE}\n\n${basePrompt}`;
   }
-  const styleParts = [styleLock.look];
+  const styleParts: string[] = [];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `Style: ${styleParts.join(' ')}\n\n${basePrompt}`;
+  return `Style: ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')}\n\n${basePrompt}`;
 }
 
 async function generateOneImage(
@@ -40,7 +45,7 @@ async function generateOneImage(
       const response = await ai.models.generateContent({
         model,
         contents: prompt,
-        config: { responseModalities: [Modality.IMAGE, Modality.TEXT] },
+        config: { responseModalities: [Modality.IMAGE] },
       });
       const candidate = response.candidates?.[0];
       for (const part of candidate?.content?.parts ?? []) {
