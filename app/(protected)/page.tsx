@@ -207,6 +207,7 @@ function HomePageInner() {
         image_model: string | null;
         reference_stills: unknown;
         shot_key_frames: unknown;
+        continuity_report: unknown;
       }) => {
         if (data.render_style) setRenderStyle(data.render_style);
         // Only restore the saved model if it's a known-good ID — stale records may
@@ -246,6 +247,20 @@ function HomePageInner() {
         if (hasShots) {
           setState({ phase: 'shots_done', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
           setActiveTab('boards');
+          // Restore the persisted continuity report, or run the check once for
+          // boards that finished while the tab was closed and were never checked.
+          const report = data.continuity_report as (ContinuityCheckResult & { checked_at?: string }) | null;
+          if (report) {
+            setContinuityIssues(report.issues);
+            setContinuitySummary(report.summary);
+            continuityAutoCheckDone.current = true;
+          } else {
+            const doneFrames = Object.values(shotFramesData ?? {}).filter((f) => f.status === 'done').length;
+            if (doneFrames >= 2 && !continuityAutoCheckDone.current) {
+              continuityAutoCheckDone.current = true;
+              void runContinuityCheck(data.id);
+            }
+          }
         } else if (hasApprovedRef || data.status === 'REFS_PENDING' || data.status === 'REFS_APPROVED') {
           setState({ phase: 'refs_done', id: data.id, title: data.title, markdown: data.source_markdown, parsedJson: data.parsed_json, warnings: [] });
           setActiveTab('images');
@@ -432,6 +447,14 @@ function HomePageInner() {
       body: JSON.stringify({ render_style: renderStyle, image_model: imageModel }),
     });
 
+    // Auto-sync shot prompts from any reference that changed since the last
+    // sync (newly approved, re-approved, or uploaded). The route short-circuits
+    // when nothing is dirty, so this is free in the common case. Failure here
+    // must never block board generation.
+    if (Object.values(refStills).some((s) => s.selected)) {
+      try { await syncPrompts(id, true); } catch { /* best-effort */ }
+    }
+
     setState((prev) =>
       prev.phase === 'refs_done' || prev.phase === 'parsed' || prev.phase === 'shots_done'
         ? { ...prev, phase: 'generating_shots' }
@@ -542,10 +565,13 @@ function HomePageInner() {
     } catch { /* AudioContext may be blocked */ }
   }
 
-  async function syncPrompts(id: string) {
+  // quiet=true keeps the sync log closed unless something actually changed —
+  // used by the automatic pre-generation sync, where "already in sync" is the
+  // common case and shouldn't produce UI noise.
+  async function syncPrompts(id: string, quiet = false) {
     setSyncingPrompts(true);
     setSyncLog([]);
-    setShowSyncLog(true);
+    if (!quiet) setShowSyncLog(true);
     try {
       const res = await fetch(`/api/storyboard/${id}/sync-prompts`, { method: 'POST' });
       if (!res.ok) {
@@ -567,6 +593,7 @@ function HomePageInner() {
           try {
             const event = JSON.parse(line.slice(6)) as Record<string, unknown>;
             if (event.type === 'entity_analysed') {
+              if (quiet) setShowSyncLog(true); // something is actually changing — surface it
               setSyncLog((prev) => [
                 ...prev,
                 `Ref "${event.name as string}" → "${event.newAppearance as string}"`,
@@ -581,7 +608,9 @@ function HomePageInner() {
               const total = event.totalShots as number;
               setSyncLog((prev) => [
                 ...prev,
-                `Done — ${updated} of ${total} shot prompts updated`,
+                event.alreadyInSync
+                  ? 'Prompts already in sync with approved references'
+                  : `Done — ${updated} of ${total} shot prompts updated`,
               ]);
               // Refresh local parsedJson so the edit-prompt textarea shows the new text
               const check = await fetch(`/api/storyboard/${id}`);
