@@ -24,20 +24,35 @@ const SINGLE_FRAME_GUARD =
   'If the description below mentions a "match cut", "intercut", "meanwhile", or another shot/timeline, ' +
   'ignore that editorial language entirely and depict ONLY this one shot\'s frozen moment.';
 
+// Restates the shot's cinematic grammar as the compositional authority, so
+// framing decisions come from the storyboard skill's grammar — not from the
+// perspective/geometry of whichever reference image happens to be attached.
+function buildGrammarLine(grammar: ParsedStoryboard['shots'][number]['grammar']): string {
+  const bits = [
+    `shot size ${grammar.scale}`,
+    `camera angle ${grammar.angle}`,
+    `lens ${grammar.lens}`,
+    `screen direction ${grammar.screen_direction}`,
+  ];
+  return `CAMERA GRAMMAR (authoritative — the frame's composition, perspective, and camera placement MUST follow this, never the geometry of any reference image): ${bits.join(', ')}.`;
+}
+
 function buildShotPrompt(
   keyFramePrompt: string,
   renderStyle: string,
   styleLock: ParsedStoryboard['style_lock'],
+  grammar?: ParsedStoryboard['shots'][number]['grammar'],
 ): string {
+  const grammarLine = grammar ? `${buildGrammarLine(grammar)}\n\n` : '';
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${SINGLE_FRAME_GUARD}\n\nStyle: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
+    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
   }
   const styleParts = [styleLock.look];
   if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
   if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
   styleParts.push(styleLock.colour_grade);
   if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${SINGLE_FRAME_GUARD}\n\nStyle: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
 }
 
 function buildStyleDeclaration(
@@ -212,13 +227,20 @@ export async function POST(
   // Build prompt — use override text if provided, otherwise the storyboard key frame prompt.
   // Style prefix always comes first; Director's note variations are appended regardless.
   const keyFrameText = overridePrompt?.trim() ? overridePrompt.trim() : shot.key_frame_prompt;
-  let prompt = buildShotPrompt(keyFrameText, renderStyle, parsed.style_lock);
+  // Omit the authoritative grammar line when variations are selected — a
+  // cinematographic variation (POV, low angle, OTS…) deliberately departs
+  // from the storyboard's grammar and must not be contradicted by it.
+  const grammarForRegen = variations.length > 0 ? undefined : shot.grammar;
+  let prompt = buildShotPrompt(keyFrameText, renderStyle, parsed.style_lock, grammarForRegen);
   if (variations.length > 0) {
     // For OTS / dirty-single variations, inject the shot's character names so the model
     // knows which character to blur vs keep in focus.
+    // Strip the appearance descriptor after the em-dash — the reference image
+    // is the appearance authority and text descriptions compete with it.
     const shotCharacterNames = shot.continuity.characters
       .map((charId: string) => entityNames[charId])
-      .filter((n): n is string => Boolean(n));
+      .filter((n): n is string => Boolean(n))
+      .map((n) => n.split(/\s[—–]\s/)[0]?.trim() ?? n);
     const enhancedVariations = variations.map((v) => {
       if (
         shotCharacterNames.length >= 2 &&
