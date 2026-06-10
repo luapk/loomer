@@ -4,6 +4,10 @@ export interface EntityStillState {
   status: 'pending' | 'generating' | 'done' | 'error';
   candidates: string[]; // Vercel Blob public URLs
   selected: string | null;
+  // The selected URL at the time shot prompts were last synced from this
+  // entity's reference image. selected !== synced_url means the entity is
+  // "dirty" and sync-prompts will re-analyse it.
+  synced_url?: string | null;
   error?: string;
 }
 

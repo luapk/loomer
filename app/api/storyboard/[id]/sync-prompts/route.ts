@@ -22,10 +22,13 @@ async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType
 }
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  // force=true re-syncs every approved entity; the default only syncs entities
+  // whose selected reference changed since the last sync (dirty tracking).
+  const force = new URL(request.url).searchParams.get('force') === 'true';
 
   const storyboard = await getDb().storyboard.findUnique({ where: { id } });
   if (!storyboard) {
@@ -49,13 +52,27 @@ export async function POST(
     ...parsed.props.map((p) => ({ id: p.id, name: p.name })),
   ];
 
-  const approvedEntities = allEntities.filter((e) => Boolean(refStills[e.id]?.selected));
-  if (approvedEntities.length === 0) {
+  const allApproved = allEntities.filter((e) => Boolean(refStills[e.id]?.selected));
+  if (allApproved.length === 0) {
     return new Response(JSON.stringify({ error: 'No approved reference images found' }), { status: 422 });
   }
 
+  // Dirty = the selected ref changed since this entity was last synced.
+  const approvedEntities = force
+    ? allApproved
+    : allApproved.filter((e) => refStills[e.id]!.selected !== refStills[e.id]!.synced_url);
+
   const anthropic = new Anthropic({ apiKey });
   const encoder = new TextEncoder();
+
+  // Nothing dirty — short-circuit with an SSE stream the client already understands.
+  if (approvedEntities.length === 0) {
+    const body = `data: ${JSON.stringify({ type: 'start', entityCount: 0, shotCount: parsed.shots.length })}\n\n` +
+      `data: ${JSON.stringify({ type: 'done', updatedShots: 0, totalShots: parsed.shots.length, alreadyInSync: true })}\n\n`;
+    return new Response(body, {
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+    });
+  }
 
   const readable = new ReadableStream({
     async start(controller) {
@@ -195,11 +212,17 @@ Return ONLY the corrected description, no preamble or explanation.`,
           }
         }
 
-        // ── Step 3: Persist updated parsed_json ─────────────────────────────
+        // ── Step 3: Persist updated parsed_json + mark synced entities clean ──
+        const updatedRefStills: ReferenceStills = { ...refStills };
+        for (const entityId of entityAppearances.keys()) {
+          const state = updatedRefStills[entityId];
+          if (state) updatedRefStills[entityId] = { ...state, synced_url: state.selected };
+        }
         await getDb().storyboard.update({
           where: { id },
           data: {
             parsed_json: { ...parsed, shots: updatedShots } as unknown as Prisma.InputJsonValue,
+            reference_stills: updatedRefStills as unknown as Prisma.InputJsonValue,
           },
         });
 
