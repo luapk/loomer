@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
 import type { RefEntity, ReferenceStills } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
+import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
@@ -12,12 +13,6 @@ export const maxDuration = 800;
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
 
-// Prepended to every PHOTOREAL-mode prompt to anchor the output medium regardless
-// of what artistic language the style_lock may contain.
-const PHOTOREAL_ANCHOR =
-  'PHOTOREALISTIC PHOTOGRAPH. Real camera, real lens, real light, real materials. ' +
-  'NOT an illustration. NOT a painting. NOT a sketch. NOT watercolour. NOT digital art. NOT anime. NOT cartoon. ' +
-  'Naturalistic human anatomy — no exaggerated proportions, no illustrated features.';
 
 // Preamble prepended to every reference still prompt.
 // Establishes the output contract before the entity description so the model
@@ -45,12 +40,7 @@ function buildPrompt(
       : 'Match the visual style of the provided style reference image.';
     return `${REF_PREAMBLE}\n\nStyle: ${styleNote}\n\n${base}`;
   }
-  const styleParts: string[] = [];
-  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
-  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
-  styleParts.push(styleLock.colour_grade);
-  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${REF_PREAMBLE}\n\nStyle: ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')}\n\n${base}`;
+  return `${REF_PREAMBLE}\n\nStyle: ${PHOTOREAL_STYLE}\n\n${base}`;
 }
 
 async function fetchImageAsBase64(

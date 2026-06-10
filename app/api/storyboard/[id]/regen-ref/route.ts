@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
+import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -13,10 +14,6 @@ export const maxDuration = 300;
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art.';
 
-const PHOTOREAL_ANCHOR =
-  'PHOTOREALISTIC PHOTOGRAPH. Real camera, real lens, real light, real materials. ' +
-  'NOT an illustration. NOT a painting. NOT a sketch. NOT watercolour. NOT digital art. NOT anime. NOT cartoon. ' +
-  'Naturalistic human anatomy — no exaggerated proportions, no illustrated features.';
 
 function buildPrompt(
   basePrompt: string,
@@ -26,12 +23,7 @@ function buildPrompt(
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `Style: ${WATERCOLOUR_STYLE}\n\n${basePrompt}`;
   }
-  const styleParts: string[] = [];
-  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
-  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
-  styleParts.push(styleLock.colour_grade);
-  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `Style: ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')}\n\n${basePrompt}`;
+  return `Style: ${PHOTOREAL_STYLE}\n\n${basePrompt}`;
 }
 
 async function generateOneImage(

@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
+import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
@@ -30,10 +31,6 @@ export type ShotKeyFrames = Record<
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
 
-const PHOTOREAL_ANCHOR =
-  'PHOTOREALISTIC PHOTOGRAPH. Real camera, real lens, real light, real materials. ' +
-  'NOT an illustration. NOT a painting. NOT a sketch. NOT watercolour. NOT digital art. NOT anime. NOT cartoon. ' +
-  'Naturalistic human anatomy — no exaggerated proportions, no illustrated features.';
 
 // Single-frame guard prepended to every shot prompt. A key_frame_prompt that
 // carries editorial cross-cut language ("match cut", "intercut", references to
@@ -74,20 +71,17 @@ function buildShotPrompt(
     // carries the grammar guard and key-frame description.
     return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${keyFramePrompt}`;
   }
-  const styleParts: string[] = [];
-  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
-  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
-  styleParts.push(styleLock.colour_grade);
-  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
+  const dofLine = grammar ? `${buildDofLine(grammar.scale)} ` : '';
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_STYLE} ${dofLine}\n\n${keyFramePrompt}`;
 }
 
-// Returns a terse style declaration placed BEFORE reference images so the model
+// Returns a style declaration placed BEFORE reference images so the model
 // anchors to the output medium before it sees any photographic references.
 // STYLE_REF mode uses a conditioning image for style — see generateOneShot.
 function buildStyleDeclaration(
   renderStyle: string,
-  styleLock: ParsedStoryboard['style_lock'],
+  _styleLock: ParsedStoryboard['style_lock'],
+  grammar?: ParsedStoryboard['shots'][number]['grammar'],
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
@@ -95,12 +89,8 @@ function buildStyleDeclaration(
   if (renderStyle === 'STYLE_REF') {
     return 'OUTPUT STYLE (mandatory): Match the visual style of the STYLE REFERENCE image provided — reproduce its colour palette, lighting quality, rendering technique, texture, and overall aesthetic. Every element in the output MUST match this style.';
   }
-  const styleParts: string[] = [];
-  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
-  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
-  styleParts.push(styleLock.colour_grade);
-  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  const dofLine = grammar ? ` ${buildDofLine(grammar.scale)}` : '';
+  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dofLine} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +364,7 @@ export async function POST(
 
               try {
                 const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock, shot.grammar);
-                const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
+                const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar);
 
                 // Primary: entities explicitly in this shot's continuity.
                 const continuityIds = new Set<string>([

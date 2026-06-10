@@ -6,6 +6,7 @@ import { getDb } from '@/src/lib/db';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
+import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -17,10 +18,6 @@ export const maxDuration = 300;
 const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
 
-const PHOTOREAL_ANCHOR =
-  'PHOTOREALISTIC PHOTOGRAPH. Real camera, real lens, real light, real materials. ' +
-  'NOT an illustration. NOT a painting. NOT a sketch. NOT watercolour. NOT digital art. NOT anime. NOT cartoon. ' +
-  'Naturalistic human anatomy — no exaggerated proportions, no illustrated features.';
 
 // Single-frame guard — see generate-shots/route.ts for rationale.
 const SINGLE_FRAME_GUARD =
@@ -53,27 +50,20 @@ function buildShotPrompt(
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
   }
-  const styleParts: string[] = [];
-  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
-  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
-  styleParts.push(styleLock.colour_grade);
-  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')}\n\n${keyFramePrompt}`;
+  const dofLine = grammar ? `${buildDofLine(grammar.scale)} ` : '';
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_STYLE} ${dofLine}\n\n${keyFramePrompt}`;
 }
 
 function buildStyleDeclaration(
   renderStyle: string,
-  styleLock: ParsedStoryboard['style_lock'],
+  _styleLock: ParsedStoryboard['style_lock'],
+  grammar?: ParsedStoryboard['shots'][number]['grammar'],
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
   }
-  const styleParts: string[] = [];
-  if (styleLock.dp_reference) styleParts.push(`Shot by ${styleLock.dp_reference}.`);
-  if (styleLock.film_stock_feel) styleParts.push(`Film: ${styleLock.film_stock_feel}.`);
-  styleParts.push(styleLock.colour_grade);
-  if (styleLock.lighting_register) styleParts.push(styleLock.lighting_register);
-  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_ANCHOR} ${styleParts.join(' ')} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  const dofLine = grammar ? ` ${buildDofLine(grammar.scale)}` : '';
+  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dofLine} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +288,7 @@ export async function POST(
 
   const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
-  const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock);
+  const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar);
   const ai = new GoogleGenAI({ apiKey });
 
   // Fetch style reference image once for STYLE_REF mode.
