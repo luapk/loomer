@@ -252,7 +252,17 @@ function HomePageInner() {
         }
 
         const shotFramesData = data.shot_key_frames as ShotKeyFrames | null;
-        if (shotFramesData) setShotKeyFrames(shotFramesData);
+        if (shotFramesData) {
+          // Normalize shots left in 'generating' by a killed server function —
+          // they would otherwise show an infinite spinner with no escape.
+          const normalizedFrames: ShotKeyFrames = {};
+          for (const [key, frame] of Object.entries(shotFramesData)) {
+            normalizedFrames[key] = frame.status === 'generating'
+              ? { ...frame, status: 'error', error: 'Generation was interrupted — use the ↺ button to retry this shot.' }
+              : frame;
+          }
+          setShotKeyFrames(normalizedFrames);
+        }
 
         if (data.source_markdown) setScript(data.source_markdown);
 

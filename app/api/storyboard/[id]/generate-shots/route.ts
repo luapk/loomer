@@ -300,10 +300,19 @@ export async function POST(
   const ai = new GoogleGenAI({ apiKey });
   const runId = Date.now();
 
-  // Initialise all shots as pending before streaming starts.
+  // Initialise shot state — preserve any 'done' frames from a previous run
+  // so re-triggering generate-boards is incremental, not destructive. Only
+  // shots that haven't completed yet are reset to 'pending'.
+  const existingFrames = (storyboard.shot_key_frames ?? {}) as ShotKeyFrames;
   const shotKeyFrames: ShotKeyFrames = {};
   for (const shot of parsed.shots) {
-    shotKeyFrames[String(shot.shot_number)] = { status: 'pending', url: null };
+    const key = String(shot.shot_number);
+    const prev = existingFrames[key];
+    if (prev?.status === 'done') {
+      shotKeyFrames[key] = prev; // keep existing render + history
+    } else {
+      shotKeyFrames[key] = { status: 'pending', url: null };
+    }
   }
   await getDb().storyboard.update({
     where: { id },
@@ -368,6 +377,14 @@ export async function POST(
 
             for (const shot of scene) {
               const shotKey = String(shot.shot_number);
+
+              // Skip shots that completed in a previous run.
+              if (shotKeyFrames[shotKey]?.status === 'done') {
+                prevShotUrl = shotKeyFrames[shotKey]?.url ?? null;
+                send({ type: 'shot_done', shotNumber: shot.shot_number, url: shotKeyFrames[shotKey]?.url ?? '', durationMs: 0, skipped: true });
+                continue;
+              }
+
               const shotStart = Date.now();
 
               send({ type: 'shot_start', shotNumber: shot.shot_number, descriptor: shot.descriptor });
