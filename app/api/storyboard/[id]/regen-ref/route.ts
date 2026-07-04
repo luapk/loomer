@@ -55,7 +55,9 @@ async function generateOneImage(
       throw new Error(`No image in response (model: ${model}). ${detail}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const isRetryable = msg.includes('"code":429') || msg.includes('"code":400');
+      // Only 429 (rate limit) is transient — 400s are deterministic and
+      // retrying them just wastes up to 50s per attempt chain.
+      const isRetryable = msg.includes('"code":429');
       if (isRetryable && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
@@ -127,12 +129,11 @@ export async function POST(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // Generate 2 candidates sequentially (rate limit safety)
-  const newUrls: string[] = [];
+  // Generate both candidates in parallel — halves user-facing latency; each
+  // has its own 429 retry chain inside generateOneImage.
   const timestamp = Date.now();
-
-  for (let j = 0; j < 2; j++) {
-    try {
+  const results = await Promise.allSettled(
+    [0, 1].map(async (j) => {
       const img = await generateOneImage(ai, model, finalPrompt);
       const buffer = Buffer.from(img.data, 'base64');
       const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
@@ -141,12 +142,13 @@ export async function POST(
         buffer,
         { access: 'public', allowOverwrite: true, contentType: img.mimeType },
       );
-      newUrls.push(blob.url);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Log but don't abort — return whatever succeeded
-      console.error(`regen-ref candidate ${j} failed:`, message);
-    }
+      return blob.url;
+    }),
+  );
+  const newUrls: string[] = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') newUrls.push(r.value);
+    else console.error('regen-ref candidate failed:', r.reason instanceof Error ? r.reason.message : String(r.reason));
   }
 
   if (newUrls.length === 0) {

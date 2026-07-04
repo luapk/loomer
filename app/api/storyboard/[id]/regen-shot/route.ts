@@ -151,10 +151,10 @@ async function generateOneShot(
       }
       return null;
     } catch (err) {
-      const is429or400 =
-        err instanceof Error &&
-        (err.message.includes('"code":429') || err.message.includes('"code":400'));
-      if (is429or400 && attempt < delays.length) {
+      // Only 429 (rate limit) is transient — 400s are deterministic and
+      // retrying them just wastes up to 50s per attempt chain.
+      const is429 = err instanceof Error && err.message.includes('"code":429');
+      if (is429 && attempt < delays.length) {
         await new Promise((r) => setTimeout(r, delays[attempt]!));
         continue;
       }
