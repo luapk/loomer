@@ -365,14 +365,21 @@ export async function POST(
           return url ? (imageCache.get(url) ?? null) : null;
         };
 
-        // Scenes run in parallel; shots within a scene run sequentially so each
-        // shot can receive the previous rendered frame for spatial continuity.
-        // A scene boundary (different location_id) guarantees prevFrame is never
-        // passed across a location cut, temporal flashback, or period jump.
+        // Scenes run concurrently (bounded); shots within a scene run
+        // sequentially so each shot can receive the previous rendered frame for
+        // spatial continuity. A scene boundary (different location_id)
+        // guarantees prevFrame is never passed across a location cut, temporal
+        // flashback, or period jump.
+        //
+        // Concurrency is capped: each in-flight Gemini call serializes its own
+        // copy of every attached base64 reference, so unbounded Promise.all
+        // over scenes (near one-per-shot on location-alternating boards) held
+        // hundreds of MB and got the function killed by Vercel on large boards.
         const scenes = groupByScene(parsed.shots);
+        const SCENE_CONCURRENCY = 3;
+        const sceneQueue = [...scenes];
 
-        await Promise.all(
-          scenes.map(async (scene) => {
+        const runScene = async (scene: ParsedStoryboard['shots']) => {
             let prevShotUrl: string | null = null;
 
             for (const shot of scene) {
@@ -389,11 +396,11 @@ export async function POST(
 
               send({ type: 'shot_start', shotNumber: shot.shot_number, descriptor: shot.descriptor });
 
+              // In-memory only — the client learns via the shot_start SSE event.
+              // Not persisting 'generating' halves the DB writes per run, and a
+              // killed function leaves the shot as 'pending' in the DB, which
+              // the incremental re-run picks up cleanly.
               shotKeyFrames[shotKey] = { status: 'generating', url: null };
-              await getDb().storyboard.update({
-                where: { id },
-                data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
-              });
 
               try {
                 const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock, shot.grammar);
@@ -478,6 +485,15 @@ export async function POST(
                 send({ type: 'shot_error', shotNumber: shot.shot_number, message, durationMs });
                 prevShotUrl = null;
               }
+            }
+        };
+
+        await Promise.all(
+          Array.from({ length: Math.min(SCENE_CONCURRENCY, sceneQueue.length) }, async () => {
+            for (;;) {
+              const scene = sceneQueue.shift();
+              if (!scene) return;
+              await runScene(scene);
             }
           }),
         );
