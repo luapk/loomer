@@ -169,6 +169,9 @@ function HomePageInner() {
 
   // Style reference upload
   const [styleRefUrl, setStyleRefUrl] = useState<string | null>(null);
+  // Mood-film music track (animatic) — restored from DB, managed by Animatic.
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioTrimStart, setAudioTrimStart] = useState(0);
   const [styleRefUploading, setStyleRefUploading] = useState(false);
   const styleRefInputRef = useRef<HTMLInputElement>(null);
 
@@ -230,12 +233,18 @@ function HomePageInner() {
         render_style: RenderStyle;
         image_model: string | null;
         style_ref_url: string | null;
+        audio_url: string | null;
+        audio_trim_start: number | null;
         reference_stills: unknown;
         shot_key_frames: unknown;
         continuity_report: unknown;
       }) => {
         if (data.render_style) setRenderStyle(data.render_style);
         if (data.style_ref_url) setStyleRefUrl(data.style_ref_url);
+        if (data.audio_url) {
+          setAudioUrl(data.audio_url);
+          setAudioTrimStart(data.audio_trim_start ?? 0);
+        }
         // Only restore the saved model if it's a known-good ID — stale records may
         // have the old non-existent 'gemini-2.0-flash-preview-image-generation' name.
         const KNOWN_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'];
@@ -1893,6 +1902,9 @@ function HomePageInner() {
           shots={state.parsedJson?.shots ?? []}
           shotKeyFrames={shotKeyFrames}
           storyboardTitle={'title' in state ? state.title : 'Untitled'}
+          storyboardId={'id' in state ? state.id : undefined}
+          initialAudioUrl={audioUrl}
+          initialTrimStart={audioTrimStart}
         />
       )}
 

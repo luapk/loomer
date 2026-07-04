@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Play, Pause, SkipBack, SkipForward, Download, Loader2,
+  Play, Pause, SkipBack, SkipForward, Download, Loader2, Music, X, Blend,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -12,6 +12,9 @@ interface AnimaticProps {
   shots: any[];
   shotKeyFrames: Record<string, { status: string; url: string | null }>;
   storyboardTitle: string;
+  storyboardId?: string;
+  initialAudioUrl?: string | null;
+  initialTrimStart?: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -25,17 +28,14 @@ function fallbackDuration(scale: string | undefined): number {
   return 3;
 }
 
-/** Effective hold duration for a shot in milliseconds, with speed multiplier. */
-function holdMs(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  shot: any,
-  speed: number,
-): number {
+/** Hold duration for a shot in milliseconds at 1× (no speed applied). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function holdMs1x(shot: any): number {
   const raw: number =
     typeof shot?.estimated_duration_seconds === 'number'
       ? shot.estimated_duration_seconds
       : fallbackDuration(shot?.grammar?.scale as string | undefined);
-  return (raw / speed) * 1000;
+  return raw * 1000;
 }
 
 /** Zero-pad a number to at least 2 digits. */
@@ -46,22 +46,43 @@ function pad2(n: number): string {
 const SPEEDS = [0.5, 1, 2] as const;
 type Speed = (typeof SPEEDS)[number];
 
-const CANVAS_W = 1280;
-const CANVAS_H = 720;
+const CANVAS_W = 1920;
+const CANVAS_H = 1080;
 const EXPORT_FPS = 30;
+const DISSOLVE_S = 0.6; // cross-dissolve length in seconds
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProps) {
+export function Animatic({
+  shots,
+  shotKeyFrames,
+  storyboardTitle,
+  storyboardId,
+  initialAudioUrl = null,
+  initialTrimStart = 0,
+}: AnimaticProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<Speed>(1);
+  const [dissolve, setDissolve] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0); // 0–1
   const [mediaRecorderSupported] = useState(() => typeof MediaRecorder !== 'undefined');
 
+  // Music track
+  const [audioUrl, setAudioUrl] = useState<string | null>(initialAudioUrl);
+  const [trimStart, setTrimStart] = useState(initialTrimStart);
+  const [audioUploading, setAudioUploading] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
+  const [waveform, setWaveform] = useState<{ peaks: number[]; duration: number } | null>(null);
+
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const imgRefs = useRef<Map<number, HTMLImageElement>>(new Map());
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioFileInputRef = useRef<HTMLInputElement | null>(null);
+  const trimSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Previous frame URL for the dissolve overlay.
+  const prevUrlRef = useRef<string | null>(null);
+  const [overlay, setOverlay] = useState<{ url: string; key: number } | null>(null);
 
   const totalShots = shots.length;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,6 +90,16 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
   const shotKey = currentShot ? String(currentShot.shot_number) : null;
   const frameData = shotKey ? (shotKeyFrames[shotKey] ?? null) : null;
   const frameUrl = frameData?.status === 'done' ? frameData.url : null;
+
+  // Cumulative 1× timeline milliseconds at the start of shot `index`.
+  const cumulativeMs = useCallback(
+    (index: number): number => {
+      let ms = 0;
+      for (let i = 0; i < index && i < shots.length; i++) ms += holdMs1x(shots[i]);
+      return ms;
+    },
+    [shots],
+  );
 
   // ── Playback timer ──────────────────────────────────────────────────────────
 
@@ -83,7 +114,6 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
     setCurrentIndex((prev) => {
       const next = prev + 1;
       if (next >= shots.length) {
-        // End of animatic — stop
         setPlaying(false);
         return prev;
       }
@@ -96,21 +126,140 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
     clearTimer();
     if (!playing) return;
     if (!currentShot) { setPlaying(false); return; }
-    const delay = holdMs(currentShot, speed);
+    const delay = holdMs1x(currentShot) / speed;
     timerRef.current = setTimeout(advance, delay);
     return clearTimer;
   }, [playing, currentIndex, speed, currentShot, advance, clearTimer]);
+
+  // Dissolve overlay: when the frame URL changes during playback, fade the
+  // previous frame out over the new one.
+  useEffect(() => {
+    const prev = prevUrlRef.current;
+    prevUrlRef.current = frameUrl;
+    if (dissolve && playing && prev && prev !== frameUrl) {
+      setOverlay({ url: prev, key: Date.now() });
+    }
+  }, [frameUrl, dissolve, playing]);
+
+  // ── Music playback sync ─────────────────────────────────────────────────────
+
+  // Keep the audio element aligned with the shot timeline: audio time =
+  // trimStart + cumulative-1×-timeline. playbackRate follows the speed
+  // selector so 2× picture means 2× music.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !audioUrl) return;
+    el.playbackRate = speed;
+    if (playing) {
+      el.currentTime = trimStart + cumulativeMs(currentIndex) / 1000;
+      void el.play().catch(() => { /* autoplay policy — ignore */ });
+    } else {
+      el.pause();
+    }
+    // Deliberately not depending on currentIndex: within continuous playback
+    // the element free-runs (no per-shot seeks, which would stutter).
+  }, [playing, audioUrl, speed]); // eslint-disable-line
+
+  // On manual seek while playing, re-align the audio.
+  const alignAudio = useCallback((index: number) => {
+    const el = audioRef.current;
+    if (!el || !audioUrl) return;
+    el.currentTime = trimStart + cumulativeMs(index) / 1000;
+  }, [audioUrl, trimStart, cumulativeMs]);
+
+  // ── Waveform decoding ───────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!audioUrl) { setWaveform(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(audioUrl);
+        const buf = await res.arrayBuffer();
+        const ctx = new AudioContext();
+        const audio = await ctx.decodeAudioData(buf);
+        void ctx.close();
+        if (cancelled) return;
+        const channel = audio.getChannelData(0);
+        const BUCKETS = 240;
+        const bucketSize = Math.floor(channel.length / BUCKETS);
+        const peaks: number[] = [];
+        for (let i = 0; i < BUCKETS; i++) {
+          let max = 0;
+          const start = i * bucketSize;
+          // Sample sparsely inside the bucket — full scan is unnecessary for a preview.
+          for (let j = start; j < start + bucketSize; j += 32) {
+            const v = Math.abs(channel[j] ?? 0);
+            if (v > max) max = v;
+          }
+          peaks.push(max);
+        }
+        setWaveform({ peaks, duration: audio.duration });
+      } catch {
+        if (!cancelled) setWaveform(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [audioUrl]);
+
+  // ── Music upload / trim / remove ────────────────────────────────────────────
+
+  async function handleAudioUpload(file: File) {
+    if (!storyboardId) return;
+    setAudioUploading(true);
+    setAudioError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/storyboard/${storyboardId}/audio`, { method: 'POST', body: form });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        setAudioError(data.error ?? 'Upload failed');
+        return;
+      }
+      const data = (await res.json()) as { url: string };
+      setAudioUrl(data.url);
+      setTrimStart(0);
+    } catch {
+      setAudioError('Network error during upload');
+    } finally {
+      setAudioUploading(false);
+    }
+  }
+
+  function handleTrimChange(seconds: number) {
+    setTrimStart(seconds);
+    alignAudio(currentIndex);
+    if (!storyboardId) return;
+    if (trimSaveTimer.current) clearTimeout(trimSaveTimer.current);
+    trimSaveTimer.current = setTimeout(() => {
+      void fetch(`/api/storyboard/${storyboardId}/audio`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trimStart: seconds }),
+      });
+    }, 600);
+  }
+
+  async function handleAudioRemove() {
+    if (!storyboardId) return;
+    setAudioUrl(null);
+    setTrimStart(0);
+    setWaveform(null);
+    await fetch(`/api/storyboard/${storyboardId}/audio`, { method: 'DELETE' });
+  }
 
   // ── Keyboard shortcut (spacebar) ────────────────────────────────────────────
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      // Only capture space when not in a form element
       if (
         e.code === 'Space' &&
         document.activeElement?.tagName !== 'INPUT' &&
         document.activeElement?.tagName !== 'TEXTAREA' &&
-        document.activeElement?.tagName !== 'BUTTON'
+        document.activeElement?.tagName !== 'BUTTON' &&
+        document.activeElement?.tagName !== 'SELECT' &&
+        document.activeElement?.tagName !== 'A'
       ) {
         e.preventDefault();
         setPlaying((v) => !v);
@@ -126,12 +275,11 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
     clearTimer();
     const clamped = Math.max(0, Math.min(shots.length - 1, index));
     setCurrentIndex(clamped);
-    // Don't stop play — let the effect reschedule
+    alignAudio(clamped);
   }
 
   function togglePlay() {
     if (currentIndex >= shots.length - 1 && !playing) {
-      // Restart from beginning
       setCurrentIndex(0);
     }
     setPlaying((v) => !v);
@@ -171,93 +319,130 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
     const ctx = canvas.getContext('2d')!;
 
     const stream = canvas.captureStream(EXPORT_FPS);
+
+    // Mix the music track into the recording, honouring the trim-in point.
+    let audioCtx: AudioContext | null = null;
+    let audioSource: AudioBufferSourceNode | null = null;
+    if (audioUrl) {
+      try {
+        audioCtx = new AudioContext();
+        const res = await fetch(audioUrl);
+        const buf = await res.arrayBuffer();
+        const audioBuf = await audioCtx.decodeAudioData(buf);
+        const dest = audioCtx.createMediaStreamDestination();
+        audioSource = audioCtx.createBufferSource();
+        audioSource.buffer = audioBuf;
+        audioSource.connect(dest);
+        const track = dest.stream.getAudioTracks()[0];
+        if (track) stream.addTrack(track);
+      } catch {
+        audioCtx = null;
+        audioSource = null;
+      }
+    }
+
     const recorder = new MediaRecorder(stream, { mimeType });
     const chunks: BlobPart[] = [];
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
+    // Preload every frame image up front so dissolves have both frames ready.
+    const loadImage = (url: string): Promise<HTMLImageElement | null> =>
+      new Promise((res) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => res(img.naturalWidth > 0 ? img : null);
+        img.onerror = () => res(null);
+        img.src = url;
+      });
+    const exportImages: (HTMLImageElement | null)[] = await Promise.all(
+      shots.map((shot) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const frame = shotKeyFrames[String((shot as any).shot_number)];
+        const url = frame?.status === 'done' ? frame.url : null;
+        return url ? loadImage(url) : Promise.resolve(null);
+      }),
+    );
+
+    const drawFrame = (img: HTMLImageElement | null, shotIdx: number, alpha = 1) => {
+      ctx.globalAlpha = alpha;
+      if (img) {
+        const imgAspect = img.naturalWidth / img.naturalHeight;
+        const canvasAspect = CANVAS_W / CANVAS_H;
+        let drawW: number, drawH: number, drawX: number, drawY: number;
+        if (imgAspect > canvasAspect) {
+          drawH = CANVAS_H;
+          drawW = drawH * imgAspect;
+          drawX = (CANVAS_W - drawW) / 2;
+          drawY = 0;
+        } else {
+          drawW = CANVAS_W;
+          drawH = drawW / imgAspect;
+          drawX = 0;
+          drawY = (CANVAS_H - drawH) / 2;
+        }
+        ctx.drawImage(img, drawX, drawY, drawW, drawH);
+      } else {
+        ctx.fillStyle = '#1c1c1c';
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.fillStyle = '#555';
+        ctx.font = `bold 72px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const s: any = shots[shotIdx];
+        const label = s?.shot_label
+          ? `Shot ${s.shot_label as string}`
+          : `Shot ${pad2((s?.shot_number as number | undefined) ?? 0)}`;
+        ctx.fillText(label, CANVAS_W / 2, CANVAS_H / 2);
+      }
+      ctx.globalAlpha = 1;
+    };
+
     await new Promise<void>((resolve) => {
       recorder.onstop = () => resolve();
       recorder.start();
+      // Music starts at the trim-in point, in lockstep with frame 0.
+      if (audioSource) audioSource.start(0, trimStart);
 
       (async () => {
-        const EXPORT_SPEED = 2;
+        const dissolveFrames = dissolve ? Math.round(DISSOLVE_S * EXPORT_FPS) : 0;
 
         for (let i = 0; i < shots.length; i++) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const shot: any = shots[i];
-          const key = String(shot.shot_number);
-          const frame = shotKeyFrames[key];
-          const url = frame?.status === 'done' ? frame.url : null;
-
           setExportProgress(i / shots.length);
+          const img = exportImages[i] ?? null;
+          const nextImg = i + 1 < shots.length ? (exportImages[i + 1] ?? null) : null;
+          const hasDissolveOut = dissolveFrames > 0 && i + 1 < shots.length;
 
-          // Load the image (with CORS) if we have a URL
-          let img: HTMLImageElement | null = null;
-          if (url) {
-            img = new Image();
-            img.crossOrigin = 'anonymous';
-            await new Promise<void>((res, _rej) => {
-              img!.onload = () => res();
-              img!.onerror = () => res(); // degrade gracefully
-              img!.src = url;
-            });
-            if (img.naturalWidth === 0) img = null; // load failed
-          }
-
-          // Figure out how many frames to draw for this shot
-          const holdSec = holdMs(shot, EXPORT_SPEED) / 1000;
+          const holdSec = holdMs1x(shots[i]) / 1000;
           const frameCount = Math.max(1, Math.round(holdSec * EXPORT_FPS));
+          const solidFrames = hasDissolveOut ? Math.max(1, frameCount - dissolveFrames) : frameCount;
 
           for (let f = 0; f < frameCount; f++) {
-            // Background
             ctx.fillStyle = '#0a0a0a';
             ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+            drawFrame(img, i);
 
-            if (img) {
-              // Cover-fit the image into the canvas
-              const imgAspect = img.naturalWidth / img.naturalHeight;
-              const canvasAspect = CANVAS_W / CANVAS_H;
-              let drawW: number, drawH: number, drawX: number, drawY: number;
-              if (imgAspect > canvasAspect) {
-                drawH = CANVAS_H;
-                drawW = drawH * imgAspect;
-                drawX = (CANVAS_W - drawW) / 2;
-                drawY = 0;
-              } else {
-                drawW = CANVAS_W;
-                drawH = drawW / imgAspect;
-                drawX = 0;
-                drawY = (CANVAS_H - drawH) / 2;
-              }
-              ctx.drawImage(img, drawX, drawY, drawW, drawH);
-            } else {
-              // Placeholder: shot number centered
-              ctx.fillStyle = '#1c1c1c';
-              ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-              ctx.fillStyle = '#555';
-              ctx.font = `bold 48px "JetBrains Mono", monospace`;
-              ctx.textAlign = 'center';
-              ctx.textBaseline = 'middle';
-              const label = shot.shot_label
-                ? `Shot ${shot.shot_label as string}`
-                : `Shot ${pad2(shot.shot_number as number)}`;
-              ctx.fillText(label, CANVAS_W / 2, CANVAS_H / 2);
+            // Cross-dissolve: blend the next shot in over the tail frames.
+            if (hasDissolveOut && f >= solidFrames) {
+              const t = (f - solidFrames + 1) / dissolveFrames;
+              drawFrame(nextImg, i + 1, Math.min(1, t));
             }
 
             // Subtitle overlay
-            const dlg: string = (shot.dialogue as string | undefined) ?? '';
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const dlg: string = ((shots[i] as any).dialogue as string | undefined) ?? '';
             if (dlg.trim()) {
-              const lines = wrapText(ctx, dlg, CANVAS_W - 120, '28px "Newsreader", serif');
-              const lineH = 38;
-              const boxH = lines.length * lineH + 24;
-              const boxY = CANVAS_H - boxH - 40;
+              const lines = wrapText(ctx, dlg, CANVAS_W - 180, '42px "Newsreader", serif');
+              const lineH = 57;
+              const boxH = lines.length * lineH + 36;
+              const boxY = CANVAS_H - boxH - 60;
 
               ctx.fillStyle = 'rgba(0,0,0,0.72)';
-              roundRect(ctx, 60, boxY - 4, CANVAS_W - 120, boxH + 8, 8);
+              roundRect(ctx, 90, boxY - 6, CANVAS_W - 180, boxH + 12, 12);
               ctx.fill();
 
               ctx.fillStyle = '#ffffff';
-              ctx.font = '28px "Newsreader", serif';
+              ctx.font = '42px "Newsreader", serif';
               ctx.textAlign = 'center';
               ctx.textBaseline = 'alphabetic';
               lines.forEach((line, li) => {
@@ -265,7 +450,7 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
               });
             }
 
-            // Force the MediaRecorder to grab this frame
+            // Real-time pacing keeps the music in sync with the picture.
             await new Promise<void>((res) => setTimeout(res, 1000 / EXPORT_FPS));
           }
         }
@@ -275,12 +460,15 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
       })().catch(() => recorder.stop());
     });
 
+    if (audioSource) { try { audioSource.stop(); } catch { /* already stopped */ } }
+    if (audioCtx) { void audioCtx.close(); }
+
     const blob = new Blob(chunks, { type: mimeType });
     const blobUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = blobUrl;
     const safeName = storyboardTitle.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
-    a.download = `${safeName}-animatic.webm`;
+    a.download = `${safeName}-${audioUrl ? 'mood-film' : 'animatic'}.webm`;
     a.click();
     URL.revokeObjectURL(blobUrl);
 
@@ -298,16 +486,24 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
     );
   }
 
+  const trimFraction = waveform && waveform.duration > 0 ? trimStart / waveform.duration : 0;
+
   return (
     <div className="space-y-4">
+      {/* Dissolve fade-out animation for the overlay frame */}
+      <style>{`@keyframes animatic-fade-out { from { opacity: 1; } to { opacity: 0; } }`}</style>
+
+      {/* Hidden audio element for playback */}
+      {audioUrl && (
+        <audio ref={audioRef} src={audioUrl} preload="auto" />
+      )}
+
       {/* Player card */}
       <div className="glass rounded-2xl overflow-hidden">
         {/* Frame area */}
         <div className="relative w-full aspect-video bg-stone-900 select-none">
           {frameUrl ? (
             <img
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              ref={(el) => { if (el) imgRefs.current.set(currentIndex, el); }}
               src={frameUrl}
               alt={`${shotLabel} — ${descriptor}`}
               crossOrigin="anonymous"
@@ -348,6 +544,20 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
                 </>
               )}
             </div>
+          )}
+
+          {/* Cross-dissolve overlay: previous frame fading out */}
+          {overlay && (
+            <img
+              key={overlay.key}
+              src={overlay.url}
+              alt=""
+              crossOrigin="anonymous"
+              draggable={false}
+              className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+              style={{ animation: `animatic-fade-out ${DISSOLVE_S}s ease-out forwards` }}
+              onAnimationEnd={() => setOverlay(null)}
+            />
           )}
 
           {/* Dialogue subtitle overlay */}
@@ -431,6 +641,54 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
             </p>
           </div>
 
+          {/* Dissolve toggle */}
+          <button
+            type="button"
+            onClick={() => setDissolve((v) => !v)}
+            className={`h-8 px-2.5 flex items-center gap-1.5 rounded-lg border transition-colors ${
+              dissolve
+                ? 'bg-stone-900 text-white border-stone-900'
+                : 'bg-white text-stone-500 border-stone-200 hover:border-stone-400'
+            }`}
+            style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.1em' }}
+            title="Cross-dissolve between shots"
+          >
+            <Blend className="h-3 w-3" />
+            DISSOLVE
+          </button>
+
+          {/* Music */}
+          {storyboardId && (
+            <>
+              <input
+                ref={audioFileInputRef}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void handleAudioUpload(file);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => audioFileInputRef.current?.click()}
+                disabled={audioUploading}
+                className={`h-8 px-2.5 flex items-center gap-1.5 rounded-lg border transition-colors ${
+                  audioUrl
+                    ? 'bg-stone-900 text-white border-stone-900'
+                    : 'bg-white text-stone-500 border-stone-200 hover:border-stone-400'
+                }`}
+                style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.1em' }}
+                title={audioUrl ? 'Replace music track' : 'Add music track'}
+              >
+                {audioUploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Music className="h-3 w-3" />}
+                {audioUrl ? 'MUSIC' : 'ADD MUSIC'}
+              </button>
+            </>
+          )}
+
           {/* Speed selector */}
           <div className="flex items-center gap-1">
             {SPEEDS.map((s) => (
@@ -458,6 +716,7 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
               disabled={exporting}
               className="h-8 px-3 flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white text-stone-600 hover:border-stone-400 hover:text-stone-900 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs"
               style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase' }}
+              title="Exports in real time — keep this tab in the foreground"
             >
               {exporting ? (
                 <>
@@ -467,7 +726,7 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
               ) : (
                 <>
                   <Download className="h-3 w-3" />
-                  Export MP4
+                  Export 1080p
                 </>
               )}
             </button>
@@ -480,6 +739,52 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
             </span>
           )}
         </div>
+
+        {/* Music strip — waveform with trim-in point */}
+        {audioUrl && (
+          <div className="px-4 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 relative h-12 rounded-lg bg-stone-100 overflow-hidden">
+                {waveform ? (
+                  <>
+                    <WaveformCanvas peaks={waveform.peaks} trimFraction={trimFraction} />
+                    <button
+                      type="button"
+                      className="absolute inset-0 w-full h-full cursor-crosshair"
+                      title="Click to set where the music starts"
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const frac = (e.clientX - rect.left) / rect.width;
+                        handleTrimChange(Math.max(0, Math.min(1, frac)) * waveform.duration);
+                      }}
+                    />
+                  </>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                  </div>
+                )}
+              </div>
+              <div className="flex-shrink-0 flex items-center gap-2">
+                <span
+                  className="text-stone-500 tabular-nums"
+                  style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, letterSpacing: '0.08em' }}
+                >
+                  IN {trimStart.toFixed(1)}s
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { void handleAudioRemove(); }}
+                  className="h-6 w-6 flex items-center justify-center rounded hover:bg-stone-200 text-stone-400 hover:text-stone-700 transition-colors"
+                  title="Remove music"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+            {audioError && <p className="text-xs text-red-600 mt-1.5">{audioError}</p>}
+          </div>
+        )}
       </div>
 
       {/* Shot strip — thumbnail filmstrip */}
@@ -496,7 +801,7 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
             <button
               key={k}
               type="button"
-              onClick={() => { clearTimer(); setCurrentIndex(idx); }}
+              onClick={() => goTo(idx)}
               className={`flex-shrink-0 w-20 rounded-lg overflow-hidden border-2 transition-colors ${
                 isActive
                   ? 'border-stone-900'
@@ -532,6 +837,44 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
       </div>
     </div>
   );
+}
+
+// ─── Waveform canvas ─────────────────────────────────────────────────────────
+
+function WaveformCanvas({ peaks, trimFraction }: { peaks: number[]; trimFraction: number }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    const w = rect.width;
+    const h = rect.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const barW = w / peaks.length;
+    const trimX = trimFraction * w;
+    const maxPeak = Math.max(0.01, ...peaks);
+    peaks.forEach((p, i) => {
+      const x = i * barW;
+      const barH = Math.max(2, (p / maxPeak) * (h - 8));
+      // Bars before the trim-in point are dimmed — they won't play.
+      ctx.fillStyle = x < trimX ? 'rgba(120,113,108,0.25)' : 'rgba(41,37,36,0.75)';
+      ctx.fillRect(x, (h - barH) / 2, Math.max(1, barW - 1), barH);
+    });
+
+    // Trim-in marker
+    ctx.fillStyle = '#292524';
+    ctx.fillRect(trimX - 1, 0, 2, h);
+  }, [peaks, trimFraction]);
+
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />;
 }
 
 // ─── Canvas helpers ───────────────────────────────────────────────────────────

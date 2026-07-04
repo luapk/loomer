@@ -26,6 +26,9 @@ model Storyboard {
   // Denormalized from parsed_json.shots.length so list views never have to
   // pull the full parsed board. Null on rows parsed before this column existed.
   shot_count        Int?
+  // Mood-film audio track (animatic): uploaded music + trim-in point (seconds).
+  audio_url         String?
+  audio_trim_start  Float            @default(0)
   created_at        DateTime         @default(now())
   updated_at      DateTime         @updatedAt
 
