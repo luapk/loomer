@@ -18,7 +18,7 @@ const WATERCOLOUR_STYLE =
 function buildPrompt(
   basePrompt: string,
   renderStyle: string,
-  styleLock: ParsedStoryboard['style_lock'],
+  _styleLock: ParsedStoryboard['style_lock'],
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `Style: ${WATERCOLOUR_STYLE}\n\n${basePrompt}`;
