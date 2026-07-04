@@ -106,7 +106,7 @@ export default async function ListPage() {
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>
                   <Button asChild size="sm" variant="secondary" className="h-7 px-2 text-xs gap-1">
-                    <Link href={`/?sb=${sb.id}`}>
+                    <Link href={`/storyboard/${sb.id}`}>
                       <ExternalLink className="h-3 w-3" />
                       Open
                     </Link>
