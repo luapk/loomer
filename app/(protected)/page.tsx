@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { CameraArrows } from './CameraArrows';
+import { ExportMenu } from './ExportMenu';
 
 // Animatic carries canvas playback + MediaRecorder export (~600 lines) that
 // most sessions never reach — load it only when the tab is opened.
@@ -1602,13 +1603,7 @@ function HomePageInner() {
           {shotsTotal > 0 && (
             <div className="flex items-center gap-3 flex-wrap">
               {'id' in state && shotsDone > 0 && !shotsGenerating && (
-                <button
-                  onClick={() => { window.open(`/api/storyboard/${state.id}/pdf`, '_blank'); }}
-                  className="flex items-center gap-1.5 text-xs text-stone-600 border border-stone-200 rounded-lg px-3 py-1.5 hover:bg-white/70 transition-colors bg-white/40"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Download PDF
-                </button>
+                <ExportMenu storyboardId={state.id} />
               )}
               {'id' in state && Object.values(shotKeyFrames).some((f) => f.status === 'done' && f.url) && (
                 <a
