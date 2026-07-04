@@ -1,7 +1,8 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
+import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
@@ -240,6 +241,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  const accessError = await assertStoryboardAccess(getDb(), id, auth);
+  if (accessError) return accessError;
+
 
   const db = getDb();
   const storyboard = await db.storyboard.findUnique({

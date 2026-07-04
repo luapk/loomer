@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/src/lib/auth';
 import { head } from '@vercel/blob';
 
 export const dynamic = 'force-dynamic';
@@ -6,6 +7,12 @@ export const dynamic = 'force-dynamic';
 const BLOB_BASE = 'https://yldnjflhzh4heowu.public.blob.vercel-storage.com';
 
 export async function GET(request: NextRequest) {
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  if (auth.role !== 'ADMIN') {
+    return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+  }
+
   const shotNumber = Number(request.nextUrl.searchParams.get('shot'));
   if (!shotNumber || shotNumber < 1 || shotNumber > 14) {
     return new Response('Use ?shot=1..14', { status: 400 });

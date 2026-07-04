@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import {
   PDFDocument,
   StandardFonts,
@@ -8,6 +8,7 @@ import {
   PDFPage,
 } from 'pdf-lib';
 import { getDb } from '@/src/lib/db';
+import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, getShotFrames } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
@@ -827,6 +828,11 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  const accessError = await assertStoryboardAccess(getDb(), id, auth);
+  if (accessError) return accessError;
+
 
   const layoutParam = request.nextUrl.searchParams.get('layout');
   const layout: PdfLayout =

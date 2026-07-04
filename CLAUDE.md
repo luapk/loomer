@@ -106,15 +106,16 @@ Set these in the Vercel project dashboard (Settings → Environment Variables):
 |---|---|
 | `DATABASE_URL` | Vercel Postgres dashboard → `.env.local` tab |
 | `ANTHROPIC_API_KEY` | console.anthropic.com → API Keys |
-| `LOOMER_PASSWORD` | pick anything — single-user password gate |
+| `SESSION_SECRET` | any long random string — signs session cookies (falls back to `LOOMER_PASSWORD` if unset) |
+| `ADMIN_EMAILS` | optional — comma-separated emails granted ADMIN (paulknott@gmail.com is a hardcoded default) |
 
-Without all three set, the app will build but requests will 500.
+Without the first three set, the app will build but requests will 500.
 
 ### Auth pattern
 
-Auth is implemented as a Next.js server component layout (not Edge middleware).
-- Protected pages live in `app/(protected)/` — the layout checks `loomer-auth` cookie and redirects to `/login` if missing/wrong.
-- API routes are **not** protected by the layout (layouts don't wrap API routes). Acceptable for v1 — API calls still require a valid `ANTHROPIC_API_KEY`.
+Email + password accounts with signed session cookies — see `docs/decisions/REVISIT-auth.md` and `src/lib/auth.ts`. Dependency-free (node:crypto scrypt + HMAC); the no-auth-providers rule still stands.
+- Protected pages live in `app/(protected)/` — the layout verifies the `loomer-session` cookie via `getSession()` and redirects to `/login`.
+- **Every** `/api/storyboard*` route requires a session (`requireSession`) and storyboard ownership (`assertStoryboardAccess`). Admins pass any ownership check; orphan boards (pre-accounts, `user_id null`) are claimed by the first user to open them. Debug routes are admin-only.
 - Don't add Edge middleware back for auth — Next.js 15 Edge bundles include `node:async_hooks` which crashes on Vercel's V8 isolate runtime with `ReferenceError: __dirname`.
 
 ### Known deployment quirks

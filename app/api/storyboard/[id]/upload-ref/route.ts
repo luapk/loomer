@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
+import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
 
 export const dynamic = 'force-dynamic';
@@ -10,6 +11,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  const accessError = await assertStoryboardAccess(getDb(), id, auth);
+  if (accessError) return accessError;
+
 
   const db = getDb();
   const storyboard = await db.storyboard.findUnique({

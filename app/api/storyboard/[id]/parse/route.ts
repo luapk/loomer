@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
 
 import { getDb } from '@/src/lib/db';
+import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { parseStoryboard } from '@/src/pipeline/02-parse';
 
 export async function POST(
@@ -12,6 +13,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  const accessError = await assertStoryboardAccess(getDb(), id, auth);
+  if (accessError) return accessError;
+
 
   const storyboard = await getDb().storyboard.findUnique({
     where: { id },

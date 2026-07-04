@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/src/lib/auth';
 import { GoogleGenAI } from '@google/genai';
 
 export const dynamic = 'force-dynamic';
@@ -54,6 +55,9 @@ async function probeModel(ai: GoogleGenAI, modelId: string): Promise<boolean> {
 }
 
 export async function GET() {
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) {
     // No key — return all models marked unavailable

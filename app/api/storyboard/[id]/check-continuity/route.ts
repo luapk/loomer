@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
+import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getShotFrames } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
@@ -151,6 +152,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  const accessError = await assertStoryboardAccess(getDb(), id, auth);
+  if (accessError) return accessError;
+
 
   const db = getDb();
   const storyboard = await db.storyboard.findUnique({

@@ -1,10 +1,17 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/src/lib/auth';
 import { getDb } from '@/src/lib/db';
 import { getShotFrames } from '@/src/lib/frame-store';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  if (auth.role !== 'ADMIN') {
+    return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+  }
+
   const db = getDb();
   const boards = await db.storyboard.findMany({
     select: { id: true, title: true, status: true },

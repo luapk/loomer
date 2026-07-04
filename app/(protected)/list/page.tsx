@@ -1,4 +1,6 @@
 import { getDb } from '@/src/lib/db';
+import { getSession } from '@/src/lib/auth';
+import { redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
 import { Badge } from '@/src/components/ui/badge';
@@ -6,6 +8,7 @@ import { Button } from '@/src/components/ui/button';
 import Link from 'next/link';
 import { FilmIcon, Plus, ExternalLink } from 'lucide-react';
 import { StoryboardRowActions, StoryboardRenameButton } from './StoryboardRowActions';
+import { SignOutButton } from './SignOutButton';
 
 function toTitleCase(str: string): string {
   const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
@@ -27,8 +30,16 @@ const STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'outli
 };
 
 export default async function ListPage() {
+  const session = await getSession();
+  if (!session) redirect('/login');
+
   const db = getDb();
+  // Members see their own boards. Admins see everything, including orphan
+  // boards created before accounts existed (user_id null).
   const storyboards = await db.storyboard.findMany({
+    where: session.role === 'ADMIN'
+      ? undefined
+      : { OR: [{ user_id: session.uid }, { user_id: null }] },
     orderBy: { created_at: 'desc' },
     select: {
       id: true,
@@ -65,12 +76,15 @@ export default async function ListPage() {
           <h1 className="text-3xl font-semibold text-stone-900 tracking-tight">Projects</h1>
           <p className="mt-1 text-stone-500 text-sm">{storyboards.length} total</p>
         </div>
-        <Button asChild>
-          <Link href="/">
-            <Plus className="h-4 w-4" />
-            New
-          </Link>
-        </Button>
+        <div className="flex items-center gap-4">
+          <SignOutButton email={session.email} />
+          <Button asChild>
+            <Link href="/">
+              <Plus className="h-4 w-4" />
+              New
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {storyboards.length === 0 ? (

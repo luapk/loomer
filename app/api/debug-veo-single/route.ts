@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireSession } from '@/src/lib/auth';
 import { GoogleGenAI } from '@google/genai';
 import { put, head } from '@vercel/blob';
 
@@ -27,6 +28,12 @@ function videoBlobPath(shotNumber: number) {
 }
 
 export async function GET(request: NextRequest) {
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  if (auth.role !== 'ADMIN') {
+    return NextResponse.json({ error: 'Admin only' }, { status: 403 });
+  }
+
   try {
     return await handler(request);
   } catch (err) {

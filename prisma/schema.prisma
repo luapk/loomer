@@ -10,9 +10,29 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id            String     @id @default(uuid())
+  email         String     @unique
+  password_hash String
+  role          UserRole   @default(MEMBER)
+  created_at    DateTime   @default(now())
+  storyboards   Storyboard[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+}
+
 model Storyboard {
   id              String           @id @default(uuid())
   title           String
+  // Owner. Null on storyboards created before accounts existed — those are
+  // visible to admins and claimed by the first signed-in user to open them.
+  user_id         String?
+  user            User?            @relation(fields: [user_id], references: [id], onDelete: SetNull)
   source_input    String           @db.Text
   source_markdown String           @db.Text
   parsed_json     Json?
@@ -37,6 +57,7 @@ model Storyboard {
   shot_frames      ShotFrame[]
   ref_stills       ReferenceStill[]
 
+  @@index([user_id])
   @@map("storyboards")
 }
 

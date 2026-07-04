@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
@@ -6,6 +6,7 @@ export const maxDuration = 800;
 import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { getDb } from '@/src/lib/db';
+import { requireSession } from '@/src/lib/auth';
 import { getAnthropicClient } from '@/src/lib/anthropic';
 import { z } from 'zod';
 
@@ -49,6 +50,9 @@ function jsonError(message: string, status: number, extra?: Record<string, unkno
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+
   const body: unknown = await request.json();
   const parsed = RequestSchema.safeParse(body);
   if (!parsed.success) {
@@ -74,7 +78,7 @@ export async function POST(request: NextRequest) {
   }
 
   const storyboard = await getDb().storyboard.create({
-    data: { title: 'Untitled', source_input: script, source_markdown: '', status: 'DRAFT' },
+    data: { title: 'Untitled', source_input: script, source_markdown: '', status: 'DRAFT', user_id: auth.uid },
   });
 
   const encoder = new TextEncoder();
