@@ -12,7 +12,9 @@ export function getDb(): PrismaClient {
   if (!connectionString) {
     throw new Error('DATABASE_URL is not set');
   }
-  const adapter = new PrismaPg({ connectionString });
+  // Small pool per lambda instance: many warm instances each holding the pg
+  // default (10) exhausts Vercel Postgres connection caps under burst load.
+  const adapter = new PrismaPg({ connectionString, max: 3 });
   _client = new PrismaClient({ adapter });
   if (process.env.NODE_ENV !== 'production') {
     (globalThis as Record<string, unknown>)['__loomer_prisma'] = _client;

@@ -142,6 +142,11 @@ export async function POST(
         const updatedShots = parsed.shots.map((s) => ({ ...s }));
         let updatedCount = 0;
 
+        // Precompute which shots need rewriting, then rewrite through a small
+        // worker pool — one serial Haiku call per shot made big boards take
+        // 60-90s where a bounded pool takes ~10s.
+        const rewriteJobs: { index: number; changeList: string }[] = [];
+
         for (let i = 0; i < parsed.shots.length; i++) {
           const shot = parsed.shots[i]!;
 
@@ -180,37 +185,49 @@ export async function POST(
           const changeList = relevantUpdates.map((u) =>
             `• "${u.strippedName}": was "${u.oldAppearance ?? 'unspecified'}", confirmed as "${u.newAppearance}"`
           ).join('\n');
+          rewriteJobs.push({ index: i, changeList });
+        }
 
-          try {
-            const msg = await anthropic.messages.create({
-              model: 'claude-haiku-4-5-20251001',
-              max_tokens: 500,
-              messages: [{
-                role: 'user',
-                content: `Rewrite this storyboard shot description to correct entity appearances. Update ONLY appearance adjectives (colour, material, texture) for the listed entities. Keep everything else — composition, action, positions, mood, camera direction — word-for-word identical. If an entity's appearance isn't explicitly mentioned, do not add new appearance text.
+        const REWRITE_CONCURRENCY = 5;
+        const jobQueue = [...rewriteJobs];
+        await Promise.all(
+          Array.from({ length: Math.min(REWRITE_CONCURRENCY, jobQueue.length) }, async () => {
+            for (;;) {
+              const job = jobQueue.shift();
+              if (!job) return;
+              const shot = parsed.shots[job.index]!;
+              try {
+                const msg = await anthropic.messages.create({
+                  model: 'claude-haiku-4-5-20251001',
+                  max_tokens: 500,
+                  messages: [{
+                    role: 'user',
+                    content: `Rewrite this storyboard shot description to correct entity appearances. Update ONLY appearance adjectives (colour, material, texture) for the listed entities. Keep everything else — composition, action, positions, mood, camera direction — word-for-word identical. If an entity's appearance isn't explicitly mentioned, do not add new appearance text.
 
 Appearance corrections:
-${changeList}
+${job.changeList}
 
 Original shot description:
 ${shot.key_frame_prompt}
 
 Return ONLY the corrected description, no preamble or explanation.`,
-              }],
-            });
+                  }],
+                });
 
-            const newPrompt = msg.content[0]?.type === 'text' ? msg.content[0].text.trim() : null;
-            if (newPrompt && newPrompt !== shot.key_frame_prompt) {
-              updatedShots[i] = { ...shot, key_frame_prompt: newPrompt };
-              updatedCount++;
-              send({ type: 'shot_updated', shotNumber: shot.shot_number, descriptor: shot.descriptor });
-            } else {
-              send({ type: 'shot_unchanged', shotNumber: shot.shot_number });
+                const newPrompt = msg.content[0]?.type === 'text' ? msg.content[0].text.trim() : null;
+                if (newPrompt && newPrompt !== shot.key_frame_prompt) {
+                  updatedShots[job.index] = { ...shot, key_frame_prompt: newPrompt };
+                  updatedCount++;
+                  send({ type: 'shot_updated', shotNumber: shot.shot_number, descriptor: shot.descriptor });
+                } else {
+                  send({ type: 'shot_unchanged', shotNumber: shot.shot_number });
+                }
+              } catch {
+                send({ type: 'shot_unchanged', shotNumber: shot.shot_number });
+              }
             }
-          } catch {
-            send({ type: 'shot_unchanged', shotNumber: shot.shot_number });
-          }
-        }
+          }),
+        );
 
         // ── Step 3: Persist updated parsed_json + mark synced entities clean ──
         const updatedRefStills: ReferenceStills = { ...refStills };
