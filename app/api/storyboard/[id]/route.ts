@@ -9,7 +9,12 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  // Project out source_input — the raw uploaded script is never read by the
+  // client and can be large; everything else is needed for session restore.
+  const storyboard = await getDb().storyboard.findUnique({
+    where: { id },
+    omit: { source_input: true },
+  });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
   }

@@ -13,7 +13,10 @@ export async function POST(
 ) {
   const { id } = await params;
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  const storyboard = await getDb().storyboard.findUnique({
+    where: { id },
+    select: { id: true, source_markdown: true },
+  });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
   }
@@ -58,12 +61,14 @@ export async function POST(
         } else {
           // Detect brand/client name via a fast Haiku call — stored alongside the
           // parsed storyboard so the UI can display it above the title.
+          // Hard 3s bound: this is cosmetic and must never sit on the critical
+          // path between parse completion and the done event.
           let brand: string | undefined;
           try {
             const anthropicKey = process.env.ANTHROPIC_API_KEY;
             if (anthropicKey) {
               const anthropic = new Anthropic({ apiKey: anthropicKey });
-              const msg = await anthropic.messages.create({
+              const detect = anthropic.messages.create({
                 model: 'claude-haiku-4-5-20251001',
                 max_tokens: 20,
                 messages: [{
@@ -71,7 +76,11 @@ export async function POST(
                   content: `Does this storyboard title contain a recognisable brand or client name? Title: "${result.storyboard.title}". Reply with just the brand name (e.g. "Nike" or "Temptations") or the single word "null".`,
                 }],
               });
-              const text = msg.content[0]?.type === 'text' ? msg.content[0].text.trim() : '';
+              const msg = await Promise.race([
+                detect,
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+              ]);
+              const text = msg?.content[0]?.type === 'text' ? msg.content[0].text.trim() : '';
               if (text && text.toLowerCase() !== 'null' && text.length <= 40) brand = text;
             }
           } catch { /* brand detection is best-effort */ }
@@ -84,6 +93,7 @@ export async function POST(
               parsed_json: storyboardFinal,
               title: result.storyboard.title,
               status: 'PARSED',
+              shot_count: result.storyboard.shots.length,
             },
           });
           send({

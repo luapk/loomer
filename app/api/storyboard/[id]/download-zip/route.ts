@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { deflateRawSync, crc32 as nodeCrc32 } from 'zlib';
+import { crc32 as nodeCrc32 } from 'zlib';
 import { getDb } from '@/src/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -55,14 +55,14 @@ function writeUInt32LE(n: number): Buffer {
 interface ZipEntry {
   filename: string;
   data: Buffer;
-  compressed: Buffer;
   crc: number;
   offset: number;
 }
 
 /**
  * Build a ZIP archive from a map of filename → raw bytes.
- * Uses DEFLATE compression (method 8).
+ * Uses STORE (method 0) — the payload is already-compressed PNG/JPEG, so
+ * deflate gains ~0% while doubling memory and blocking the event loop.
  */
 function buildZip(files: { name: string; data: Buffer }[]): Buffer {
   const entries: ZipEntry[] = [];
@@ -71,7 +71,6 @@ function buildZip(files: { name: string; data: Buffer }[]): Buffer {
 
   for (const file of files) {
     const crc = computeCrc32(file.data);
-    const compressed = deflateRawSync(file.data, { level: 6 });
     const nameBytes = Buffer.from(file.name, 'utf8');
 
     // Local file header
@@ -79,11 +78,11 @@ function buildZip(files: { name: string; data: Buffer }[]): Buffer {
       Buffer.from([0x50, 0x4b, 0x03, 0x04]), // signature
       writeUInt16LE(20),                       // version needed: 2.0
       writeUInt16LE(0),                        // general purpose bit flag
-      writeUInt16LE(8),                        // compression method: deflate
+      writeUInt16LE(0),                        // compression method: store
       writeUInt16LE(0),                        // last mod time
       writeUInt16LE(0),                        // last mod date
       writeUInt32LE(crc),                      // crc-32
-      writeUInt32LE(compressed.length),        // compressed size
+      writeUInt32LE(file.data.length),         // compressed size (= stored size)
       writeUInt32LE(file.data.length),         // uncompressed size
       writeUInt16LE(nameBytes.length),         // file name length
       writeUInt16LE(0),                        // extra field length
@@ -93,13 +92,12 @@ function buildZip(files: { name: string; data: Buffer }[]): Buffer {
     entries.push({
       filename: file.name,
       data: file.data,
-      compressed,
       crc,
       offset,
     });
 
-    parts.push(localHeader, compressed);
-    offset += localHeader.length + compressed.length;
+    parts.push(localHeader, file.data);
+    offset += localHeader.length + file.data.length;
   }
 
   // Central directory
@@ -111,11 +109,11 @@ function buildZip(files: { name: string; data: Buffer }[]): Buffer {
       writeUInt16LE(20),                       // version made by
       writeUInt16LE(20),                       // version needed
       writeUInt16LE(0),                        // general purpose bit flag
-      writeUInt16LE(8),                        // compression method
+      writeUInt16LE(0),                        // compression method: store
       writeUInt16LE(0),                        // last mod time
       writeUInt16LE(0),                        // last mod date
       writeUInt32LE(entry.crc),                // crc-32
-      writeUInt32LE(entry.compressed.length),  // compressed size
+      writeUInt32LE(entry.data.length),        // compressed size (= stored size)
       writeUInt32LE(entry.data.length),        // uncompressed size
       writeUInt16LE(nameBytes.length),         // file name length
       writeUInt16LE(0),                        // extra field length
@@ -171,7 +169,10 @@ export async function GET(
   const { id } = await params;
 
   const db = getDb();
-  const row = await db.storyboard.findUnique({ where: { id } });
+  const row = await db.storyboard.findUnique({
+    where: { id },
+    select: { title: true, shot_key_frames: true },
+  });
 
   if (!row) {
     return Response.json({ error: 'Storyboard not found' }, { status: 404 });

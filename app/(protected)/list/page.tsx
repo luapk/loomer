@@ -27,16 +27,36 @@ const STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'outli
 };
 
 export default async function ListPage() {
-  const storyboards = await getDb().storyboard.findMany({
+  const db = getDb();
+  const storyboards = await db.storyboard.findMany({
     orderBy: { created_at: 'desc' },
     select: {
       id: true,
       title: true,
       status: true,
       created_at: true,
-      parsed_json: true,
+      shot_count: true,
     },
   });
+
+  // One-time lazy backfill: rows parsed before shot_count existed. Fetches
+  // parsed_json only for those rows, once — afterwards the list never pulls
+  // the full parsed board again.
+  const missing = storyboards.filter((sb) => sb.shot_count === null && sb.status !== 'DRAFT');
+  if (missing.length > 0) {
+    const rows = await db.storyboard.findMany({
+      where: { id: { in: missing.map((sb) => sb.id) } },
+      select: { id: true, parsed_json: true },
+    });
+    await Promise.all(rows.map(async (row) => {
+      const parsed = row.parsed_json as Record<string, unknown> | null;
+      const shots = parsed && Array.isArray(parsed['shots']) ? parsed['shots'] : null;
+      if (shots === null) return;
+      const sb = storyboards.find((s) => s.id === row.id);
+      if (sb) sb.shot_count = shots.length;
+      await db.storyboard.update({ where: { id: row.id }, data: { shot_count: shots.length } });
+    }));
+  }
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-12 space-y-8">
@@ -65,9 +85,7 @@ export default async function ListPage() {
         <div className="space-y-3">
           {storyboards.map((sb) => {
             const statusInfo = STATUS_LABELS[sb.status] ?? { label: sb.status, variant: 'default' as const };
-            const parsed = sb.parsed_json as Record<string, unknown> | null;
-            const shots = parsed && Array.isArray(parsed['shots']) ? parsed['shots'] : null;
-            const shotCount = shots !== null ? shots.length : null;
+            const shotCount = sb.shot_count;
 
             return (
               <div key={sb.id} className="group glass rounded-2xl p-5 flex items-center justify-between gap-4 hover:bg-white/70 transition-colors">

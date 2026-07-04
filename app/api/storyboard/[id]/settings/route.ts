@@ -27,18 +27,21 @@ export async function POST(
     return Response.json({ error: 'Invalid body', details: parsed.error.flatten() }, { status: 422 });
   }
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
-  if (!storyboard) {
-    return Response.json({ error: 'Storyboard not found' }, { status: 404 });
+  try {
+    await getDb().storyboard.update({
+      where: { id },
+      data: {
+        render_style: parsed.data.render_style,
+        image_model: parsed.data.image_model,
+      },
+    });
+  } catch (err) {
+    // P2025 = record not found — avoids a separate existence round-trip.
+    if (err instanceof Error && 'code' in err && (err as { code?: string }).code === 'P2025') {
+      return Response.json({ error: 'Storyboard not found' }, { status: 404 });
+    }
+    throw err;
   }
-
-  await getDb().storyboard.update({
-    where: { id },
-    data: {
-      render_style: parsed.data.render_style,
-      image_model: parsed.data.image_model,
-    },
-  });
 
   return Response.json({ ok: true });
 }
