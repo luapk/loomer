@@ -97,6 +97,7 @@ function safe(text: string | null | undefined): string {
     .replace(/●/g, '*')    // black circle bullet
     .replace(/ /g, ' ')    // non-breaking space
     .replace(/’/g, "'")    // right single quote
+    // eslint-disable-next-line no-control-regex -- intentional Latin-1 range guard for WinAnsi
     .replace(/[^\x00-\xFF]/g, ''); // strip anything else outside Latin-1
 }
 
