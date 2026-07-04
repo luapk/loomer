@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
-import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
-import type { ReferenceStills } from '@/src/lib/reference-stills';
+import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
 
@@ -83,7 +82,10 @@ export async function POST(
   }
 
   const db = getDb();
-  const storyboard = await db.storyboard.findUnique({ where: { id } });
+  const storyboard = await db.storyboard.findUnique({
+    where: { id },
+    select: { parsed_json: true, image_model: true, render_style: true },
+  });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
   }
@@ -155,23 +157,17 @@ export async function POST(
     return NextResponse.json({ error: 'All candidates failed to generate' }, { status: 500 });
   }
 
-  // Merge: prepend new candidates to existing ones
-  const existing = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
-  const existingEntry = existing[entityId];
+  // Merge: prepend new candidates to this entity's existing ones — a single-
+  // row write that cannot affect any other entity's state.
+  const refStills = await getReferenceStills(db, id);
+  const existingEntry = refStills[entityId];
   const mergedCandidates = [...newUrls, ...(existingEntry?.candidates ?? [])];
 
-  const updated: ReferenceStills = {
-    ...existing,
-    [entityId]: {
-      status: 'done',
-      candidates: mergedCandidates,
-      selected: existingEntry?.selected ?? null,
-    },
-  };
-
-  await db.storyboard.update({
-    where: { id },
-    data: { reference_stills: updated as unknown as Prisma.InputJsonValue },
+  await upsertReferenceStill(db, id, entityId, {
+    ...(existingEntry ?? {}),
+    status: 'done',
+    candidates: mergedCandidates,
+    selected: existingEntry?.selected ?? null,
   });
 
   return NextResponse.json({ candidates: mergedCandidates });

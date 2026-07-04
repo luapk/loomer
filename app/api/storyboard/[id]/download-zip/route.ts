@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { crc32 as nodeCrc32 } from 'zlib';
 import { getDb } from '@/src/lib/db';
+import { getShotFrames } from '@/src/lib/frame-store';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -147,18 +148,6 @@ function buildZip(files: { name: string; data: Buffer }[]): Buffer {
 }
 
 // ============================================================================
-// Shot key frames type
-// ============================================================================
-
-type ShotKeyFrameEntry = {
-  status: string;
-  url: string | null;
-  error?: string;
-};
-
-type ShotKeyFrames = Record<string, ShotKeyFrameEntry>;
-
-// ============================================================================
 // Route handler
 // ============================================================================
 
@@ -171,19 +160,17 @@ export async function GET(
   const db = getDb();
   const row = await db.storyboard.findUnique({
     where: { id },
-    select: { title: true, shot_key_frames: true },
+    select: { title: true },
   });
 
   if (!row) {
     return Response.json({ error: 'Storyboard not found' }, { status: 404 });
   }
 
-  if (!row.shot_key_frames) {
+  const keyFrames = await getShotFrames(db, id);
+  if (Object.keys(keyFrames).length === 0) {
     return Response.json({ error: 'No shots generated yet' }, { status: 422 });
   }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const keyFrames = row.shot_key_frames as any as ShotKeyFrames;
 
   const doneEntries = Object.entries(keyFrames)
     .filter(([, f]) => f.status === 'done' && f.url)

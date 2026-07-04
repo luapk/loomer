@@ -1,8 +1,7 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
-import type { ReferenceStills } from '@/src/lib/reference-stills';
+import { getReferenceStills, setReferenceSelected } from '@/src/lib/frame-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,23 +30,21 @@ export async function POST(
 
   const { entityId, selectedUrl } = parsed.data;
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  const db = getDb();
+  const storyboard = await db.storyboard.findUnique({ where: { id }, select: { id: true } });
   if (!storyboard) {
     return Response.json({ error: 'Storyboard not found' }, { status: 404 });
   }
 
-  const refStills = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
-  const entity = refStills[entityId];
-  if (!entity) {
-    return Response.json({ error: 'Entity not found in reference_stills' }, { status: 404 });
+  // getReferenceStills triggers the lazy backfill for legacy storyboards, so
+  // the per-row selected update below always has a row to hit.
+  const refStills = await getReferenceStills(db, id);
+  if (!refStills[entityId]) {
+    return Response.json({ error: 'Entity not found in reference stills' }, { status: 404 });
   }
 
-  refStills[entityId] = { ...entity, selected: selectedUrl };
-
-  await getDb().storyboard.update({
-    where: { id },
-    data: { reference_stills: refStills as unknown as Prisma.InputJsonValue },
-  });
+  // Single-row write — can never clobber concurrent candidate generation.
+  await setReferenceSelected(db, id, entityId, selectedUrl);
 
   return Response.json({ ok: true });
 }

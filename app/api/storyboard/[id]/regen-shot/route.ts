@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
-import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
-import type { ReferenceStills } from '@/src/lib/reference-stills';
+import { getReferenceStills, upsertShotFrame } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
-import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
 import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
@@ -200,7 +198,11 @@ export async function POST(
     return NextResponse.json({ error: 'variations must be an array' }, { status: 400 });
   }
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  const db = getDb();
+  const storyboard = await db.storyboard.findUnique({
+    where: { id },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
+  });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
   }
@@ -275,7 +277,7 @@ export async function POST(
   }
 
   // Collect named conditioning refs.
-  const refStills = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
+  const refStills = await getReferenceStills(db, id);
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
 
@@ -331,20 +333,17 @@ export async function POST(
 
   const blob = await put(blobPath, buffer, { access: 'public', contentType: img.mimeType });
 
-  // Update shot_key_frames — push the previous render URL into history (newest-first).
-  const existing = (storyboard.shot_key_frames ?? {}) as ShotKeyFrames;
-  const prevEntry = existing[String(shotNumber)];
-  const prevUrl = prevEntry?.url ?? null;
-  const prevHistory = prevEntry?.history ?? [];
-  const history = prevUrl ? [prevUrl, ...prevHistory].slice(0, 10) : prevHistory;
-  const updated: ShotKeyFrames = {
-    ...existing,
-    [String(shotNumber)]: { status: 'done', url: blob.url, history },
-  };
-  await getDb().storyboard.update({
-    where: { id },
-    data: { shot_key_frames: updated as unknown as Prisma.InputJsonValue },
+  // Push the previous render URL into history (newest-first) and write ONLY
+  // this shot's row — a concurrent board run can no longer be clobbered, and
+  // this regen can no longer be overwritten by it.
+  const prevRow = await db.shotFrame.findUnique({
+    where: { storyboard_id_shot_number: { storyboard_id: id, shot_number: shotNumber } },
+    select: { url: true, history: true },
   });
+  const prevUrl = prevRow?.url ?? null;
+  const prevHistory = prevRow?.history ?? [];
+  const history = prevUrl ? [prevUrl, ...prevHistory].slice(0, 10) : prevHistory;
+  await upsertShotFrame(db, id, shotNumber, { status: 'done', url: blob.url, history });
 
   return NextResponse.json({ url: blob.url, history });
 }

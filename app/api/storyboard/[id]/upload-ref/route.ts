@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { put } from '@vercel/blob';
-import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
-import type { ReferenceStills } from '@/src/lib/reference-stills';
+import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,9 +11,10 @@ export async function POST(
 ) {
   const { id } = await params;
 
-  const storyboard = await getDb().storyboard.findUnique({
+  const db = getDb();
+  const storyboard = await db.storyboard.findUnique({
     where: { id },
-    select: { id: true, reference_stills: true },
+    select: { id: true },
   });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
@@ -44,18 +44,15 @@ export async function POST(
     { access: 'public', contentType: file.type },
   );
 
-  // Merge into reference_stills: add the uploaded URL as a candidate and set it as selected
-  const existing = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
-  const entityState = existing[entityId] ?? { status: 'done', candidates: [], selected: null };
+  // Add the uploaded URL as the leading candidate and select it — one row.
+  const refStills = await getReferenceStills(db, id);
+  const entityState = refStills[entityId] ?? { status: 'done' as const, candidates: [], selected: null };
   const updatedCandidates = [blob.url, ...entityState.candidates.filter((u) => u !== blob.url)];
-  const updated: ReferenceStills = {
-    ...existing,
-    [entityId]: { status: 'done', candidates: updatedCandidates, selected: blob.url },
-  };
-
-  await getDb().storyboard.update({
-    where: { id },
-    data: { reference_stills: updated as unknown as Prisma.InputJsonValue },
+  await upsertReferenceStill(db, id, entityId, {
+    ...entityState,
+    status: 'done',
+    candidates: updatedCandidates,
+    selected: blob.url,
   });
 
   return NextResponse.json({ url: blob.url, candidates: updatedCandidates });

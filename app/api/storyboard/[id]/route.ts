@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 import { getDb } from '@/src/lib/db';
+import { getReferenceStills, getShotFrames } from '@/src/lib/frame-store';
 
 export async function GET(
   _request: NextRequest,
@@ -11,15 +12,27 @@ export async function GET(
 
   // Project out source_input — the raw uploaded script is never read by the
   // client and can be large; everything else is needed for session restore.
-  const storyboard = await getDb().storyboard.findUnique({
+  // The legacy Json columns are also omitted: the normalized rows are the
+  // source of truth and are assembled into the same response keys below.
+  const db = getDb();
+  const storyboard = await db.storyboard.findUnique({
     where: { id },
-    omit: { source_input: true },
+    omit: { source_input: true, reference_stills: true, shot_key_frames: true },
   });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
   }
 
-  return NextResponse.json(storyboard);
+  const [refStills, shotFrames] = await Promise.all([
+    getReferenceStills(db, id),
+    getShotFrames(db, id),
+  ]);
+
+  return NextResponse.json({
+    ...storyboard,
+    reference_stills: Object.keys(refStills).length > 0 ? refStills : null,
+    shot_key_frames: Object.keys(shotFrames).length > 0 ? shotFrames : null,
+  });
 }
 
 export async function PATCH(

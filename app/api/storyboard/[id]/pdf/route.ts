@@ -8,6 +8,7 @@ import {
   PDFPage,
 } from 'pdf-lib';
 import { getDb } from '@/src/lib/db';
+import { getReferenceStills, getShotFrames } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 
@@ -836,7 +837,7 @@ export async function GET(
   const db = getDb();
   const row = await db.storyboard.findUnique({
     where: { id },
-    select: { title: true, parsed_json: true, shot_key_frames: true, reference_stills: true },
+    select: { title: true, parsed_json: true },
   });
 
   if (!row) {
@@ -853,12 +854,8 @@ export async function GET(
     );
   }
 
-  const keyFrames: ShotKeyFrames = row.shot_key_frames
-    ? (row.shot_key_frames as unknown as ShotKeyFrames)
-    : {};
-  const refStills: ReferenceStills = row.reference_stills
-    ? (row.reference_stills as unknown as ReferenceStills)
-    : {};
+  const keyFrames: ShotKeyFrames = await getShotFrames(db, id);
+  const refStills: ReferenceStills = layout === 'lookbook' ? await getReferenceStills(db, id) : {};
 
   try {
     const pdfDoc = await PDFDocument.create();

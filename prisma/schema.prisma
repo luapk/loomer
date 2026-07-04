@@ -19,6 +19,8 @@ model Storyboard {
   status          StoryboardStatus @default(DRAFT)
   render_style      RenderStyle      @default(PHOTOREAL)
   image_model       String?
+  // LEGACY: superseded by ReferenceStill / ShotFrame rows. Kept read-only for
+  // lazy backfill of pre-normalization storyboards; never written anymore.
   reference_stills  Json?
   shot_key_frames   Json?
   continuity_report Json?
@@ -32,7 +34,45 @@ model Storyboard {
   created_at        DateTime         @default(now())
   updated_at      DateTime         @updatedAt
 
+  shot_frames      ShotFrame[]
+  ref_stills       ReferenceStill[]
+
   @@map("storyboards")
+}
+
+// One row per shot's rendered key frame. Per-row writes are atomic, so a
+// regen on shot 7 can never clobber a board run's write to shot 12 (the
+// lost-update race the old shot_key_frames Json column had).
+model ShotFrame {
+  id            String     @id @default(uuid())
+  storyboard_id String
+  shot_number   Int
+  status        String     @default("pending") // pending | generating | done | error
+  url           String?
+  history       String[]   @default([]) // previous render URLs, newest-first
+  error         String?
+  updated_at    DateTime   @updatedAt
+  storyboard    Storyboard @relation(fields: [storyboard_id], references: [id], onDelete: Cascade)
+
+  @@unique([storyboard_id, shot_number])
+  @@map("shot_frames")
+}
+
+// One row per Bible entity's reference still state.
+model ReferenceStill {
+  id            String     @id @default(uuid())
+  storyboard_id String
+  entity_id     String // CHAR-* / LOC-* / PROP-*
+  status        String     @default("pending") // pending | generating | done | error
+  candidates    String[]   @default([])
+  selected      String?
+  synced_url    String?
+  error         String?
+  updated_at    DateTime   @updatedAt
+  storyboard    Storyboard @relation(fields: [storyboard_id], references: [id], onDelete: Cascade)
+
+  @@unique([storyboard_id, entity_id])
+  @@map("reference_stills_rows")
 }
 
 enum RenderStyle {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
+import { getShotFrames } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
 
@@ -151,11 +152,16 @@ export async function POST(
 ) {
   const { id } = await params;
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  const db = getDb();
+  const storyboard = await db.storyboard.findUnique({
+    where: { id },
+    select: { parsed_json: true },
+  });
   if (!storyboard?.parsed_json) {
     return NextResponse.json({ error: 'Storyboard not parsed' }, { status: 422 });
   }
-  if (!storyboard.shot_key_frames) {
+  const frames = await getShotFrames(db, id);
+  if (Object.keys(frames).length === 0) {
     return NextResponse.json({ error: 'No boards generated yet' }, { status: 422 });
   }
 
@@ -165,7 +171,7 @@ export async function POST(
   }
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
-  const shotKeyFrames = storyboard.shot_key_frames as unknown as ShotKeyFrames;
+  const shotKeyFrames = frames as ShotKeyFrames;
 
   const doneCount = Object.values(shotKeyFrames).filter((f) => f.status === 'done').length;
   if (doneCount < 2) {

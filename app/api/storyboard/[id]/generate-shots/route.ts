@@ -1,9 +1,8 @@
 import { NextRequest } from 'next/server';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
-import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
-import type { ReferenceStills } from '@/src/lib/reference-stills';
+import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
@@ -14,15 +13,9 @@ export const maxDuration = 800;
 // Types
 // ---------------------------------------------------------------------------
 
-export type ShotKeyFrames = Record<
-  string, // key = shot_number as string
-  {
-    status: 'pending' | 'generating' | 'done' | 'error';
-    url: string | null;
-    history?: string[]; // previous render URLs, newest-first
-    error?: string;
-  }
->;
+// Re-exported for older imports — the canonical definition lives in frame-store.
+export type { ShotKeyFrames } from '@/src/lib/frame-store';
+import type { ShotKeyFrames } from '@/src/lib/frame-store';
 
 // ---------------------------------------------------------------------------
 // Style helpers
@@ -248,7 +241,11 @@ export async function POST(
 ) {
   const { id } = await params;
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  const db = getDb();
+  const storyboard = await db.storyboard.findUnique({
+    where: { id },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
+  });
   if (!storyboard) {
     return new Response(JSON.stringify({ error: 'Storyboard not found' }), { status: 404 });
   }
@@ -265,7 +262,7 @@ export async function POST(
   const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
   const renderStyle = storyboard.render_style;
 
-  const refStills = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
+  const refStills = await getReferenceStills(db, id);
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
 
@@ -302,25 +299,22 @@ export async function POST(
 
   // Initialise shot state — preserve any 'done' frames from a previous run
   // so re-triggering generate-boards is incremental, not destructive. Only
-  // shots that haven't completed yet are reset to 'pending'.
-  const existingFrames = (storyboard.shot_key_frames ?? {}) as ShotKeyFrames;
+  // shots that haven't completed yet are reset to 'pending' (one row each).
+  const existingFrames = await getShotFrames(db, id);
   const shotKeyFrames: ShotKeyFrames = {};
+  const resetWrites: Promise<void>[] = [];
   for (const shot of parsed.shots) {
     const key = String(shot.shot_number);
     const prev = existingFrames[key];
     if (prev?.status === 'done') {
       shotKeyFrames[key] = prev; // keep existing render + history
     } else {
-      shotKeyFrames[key] = { status: 'pending', url: null };
+      shotKeyFrames[key] = { status: 'pending', url: null, history: prev?.history ?? [] };
+      resetWrites.push(upsertShotFrame(db, id, shot.shot_number, shotKeyFrames[key]!));
     }
   }
-  await getDb().storyboard.update({
-    where: { id },
-    data: {
-      shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue,
-      status: 'SHOTS_GENERATING',
-    },
-  });
+  await Promise.all(resetWrites);
+  await db.storyboard.update({ where: { id }, data: { status: 'SHOTS_GENERATING' } });
 
   const readable = new ReadableStream({
     async start(controller) {
@@ -443,10 +437,7 @@ export async function POST(
                 if (!img) {
                   const durationMs = Date.now() - shotStart;
                   shotKeyFrames[shotKey] = { status: 'error', url: null, error: 'No image returned from model' };
-                  await getDb().storyboard.update({
-                    where: { id },
-                    data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
-                  });
+                  await upsertShotFrame(db, id, shot.shot_number, shotKeyFrames[shotKey]!);
                   send({ type: 'shot_error', shotNumber: shot.shot_number, message: 'No image returned from model', durationMs });
                   prevShotUrl = null;
                   continue;
@@ -467,10 +458,7 @@ export async function POST(
                 const prevHistory = prev?.history ?? [];
                 const history = prevUrl ? [prevUrl, ...prevHistory].slice(0, 10) : prevHistory;
                 shotKeyFrames[shotKey] = { status: 'done', url: blob.url, history };
-                await getDb().storyboard.update({
-                  where: { id },
-                  data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
-                });
+                await upsertShotFrame(db, id, shot.shot_number, shotKeyFrames[shotKey]!);
 
                 send({ type: 'shot_done', shotNumber: shot.shot_number, url: blob.url, durationMs });
                 prevShotUrl = blob.url;
@@ -478,10 +466,7 @@ export async function POST(
                 const message = err instanceof Error ? err.message : String(err);
                 const durationMs = Date.now() - shotStart;
                 shotKeyFrames[shotKey] = { status: 'error', url: null, error: message };
-                await getDb().storyboard.update({
-                  where: { id },
-                  data: { shot_key_frames: shotKeyFrames as unknown as Prisma.InputJsonValue },
-                });
+                await upsertShotFrame(db, id, shot.shot_number, shotKeyFrames[shotKey]!);
                 send({ type: 'shot_error', shotNumber: shot.shot_number, message, durationMs });
                 prevShotUrl = null;
               }
@@ -498,7 +483,7 @@ export async function POST(
           }),
         );
 
-        await getDb().storyboard.update({
+        await db.storyboard.update({
           where: { id },
           data: { status: 'COMPLETE' },
         });

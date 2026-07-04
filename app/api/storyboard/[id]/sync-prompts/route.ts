@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
-import type { ReferenceStills } from '@/src/lib/reference-stills';
+import { getReferenceStills, markReferencesSynced } from '@/src/lib/frame-store';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +30,11 @@ export async function POST(
   // whose selected reference changed since the last sync (dirty tracking).
   const force = new URL(request.url).searchParams.get('force') === 'true';
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  const db = getDb();
+  const storyboard = await db.storyboard.findUnique({
+    where: { id },
+    select: { parsed_json: true },
+  });
   if (!storyboard) {
     return new Response(JSON.stringify({ error: 'Storyboard not found' }), { status: 404 });
   }
@@ -44,7 +48,7 @@ export async function POST(
   }
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
-  const refStills = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
+  const refStills = await getReferenceStills(db, id);
 
   const allEntities = [
     ...parsed.characters.map((c) => ({ id: c.id, name: c.name })),
@@ -230,18 +234,13 @@ Return ONLY the corrected description, no preamble or explanation.`,
         );
 
         // ── Step 3: Persist updated parsed_json + mark synced entities clean ──
-        const updatedRefStills: ReferenceStills = { ...refStills };
-        for (const entityId of entityAppearances.keys()) {
-          const state = updatedRefStills[entityId];
-          if (state) updatedRefStills[entityId] = { ...state, synced_url: state.selected };
-        }
-        await getDb().storyboard.update({
+        await db.storyboard.update({
           where: { id },
           data: {
             parsed_json: { ...parsed, shots: updatedShots } as unknown as Prisma.InputJsonValue,
-            reference_stills: updatedRefStills as unknown as Prisma.InputJsonValue,
           },
         });
+        await markReferencesSynced(db, id, [...entityAppearances.keys()]);
 
         send({ type: 'done', updatedShots: updatedCount, totalShots: parsed.shots.length });
       } catch (err) {

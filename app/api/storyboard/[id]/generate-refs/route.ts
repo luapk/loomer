@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
-import { Prisma } from '@prisma/client';
 import { getDb } from '@/src/lib/db';
-import type { RefEntity, ReferenceStills } from '@/src/lib/reference-stills';
+import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
+import type { RefEntity } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
 
@@ -151,7 +151,10 @@ export async function POST(
   const { id } = await params;
   const force = new URL(request.url).searchParams.get('force') === 'true';
 
-  const storyboard = await getDb().storyboard.findUnique({ where: { id } });
+  const storyboard = await getDb().storyboard.findUnique({
+    where: { id },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
+  });
   if (!storyboard) {
     return new Response(JSON.stringify({ error: 'Storyboard not found' }), { status: 404 });
   }
@@ -196,19 +199,18 @@ export async function POST(
   const runId = Date.now();
 
   // On force (redo), regenerate all entities. Otherwise skip ones that already have candidates.
-  const existing = (storyboard.reference_stills ?? {}) as unknown as ReferenceStills;
+  const db = getDb();
+  const existing = await getReferenceStills(db, id);
   const entitiesToGenerate = force
     ? entities
     : entities.filter((e) => !(existing[e.id]?.candidates.length));
 
-  const refStills: ReferenceStills = { ...existing };
-  for (const entity of entitiesToGenerate) {
-    refStills[entity.id] = { status: 'pending', candidates: [], selected: existing[entity.id]?.selected ?? null };
-  }
-  await getDb().storyboard.update({
-    where: { id },
-    data: { reference_stills: refStills as unknown as Prisma.InputJsonValue, status: 'REFS_PENDING' },
-  });
+  await Promise.all(entitiesToGenerate.map((entity) =>
+    upsertReferenceStill(db, id, entity.id, {
+      status: 'pending', candidates: [], selected: existing[entity.id]?.selected ?? null,
+    }),
+  ));
+  await db.storyboard.update({ where: { id }, data: { status: 'REFS_PENDING' } });
 
   const readable = new ReadableStream({
     async start(controller) {
@@ -233,8 +235,9 @@ export async function POST(
           const entityStart = Date.now();
           send({ type: 'entity_start', entityId: entity.id, entityName: entity.name, entityType: entity.type, index: i, total: entitiesToGenerate.length });
 
-          refStills[entity.id] = { status: 'generating', candidates: [], selected: existing[entity.id]?.selected ?? null };
-          await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
+          await upsertReferenceStill(db, id, entity.id, {
+            status: 'generating', candidates: [], selected: existing[entity.id]?.selected ?? null,
+          });
 
           try {
             const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
@@ -270,8 +273,17 @@ export async function POST(
             const errorMsg = aiCandidates.length === 0
               ? rejectionMsgs[0] ?? 'All candidates failed with unknown error.'
               : undefined;
-            refStills[entity.id] = { status, candidates, selected: existing[entity.id]?.selected ?? null, ...(errorMsg ? { error: errorMsg } : {}) };
-            await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
+            // Re-read this row's selected before writing: an approval may have
+            // landed while candidates were generating, and must survive.
+            const liveRow = await db.referenceStill.findUnique({
+              where: { storyboard_id_entity_id: { storyboard_id: id, entity_id: entity.id } },
+              select: { selected: true },
+            });
+            await upsertReferenceStill(db, id, entity.id, {
+              status, candidates,
+              selected: liveRow?.selected ?? existing[entity.id]?.selected ?? null,
+              ...(errorMsg ? { error: errorMsg } : {}),
+            });
 
             if (candidates.length > 0) {
               send({ type: 'entity_done', entityId: entity.id, candidates, durationMs: Date.now() - entityStart });
@@ -280,8 +292,9 @@ export async function POST(
             }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            refStills[entity.id] = { status: 'error', candidates: [], selected: existing[entity.id]?.selected ?? null, error: message };
-            await getDb().storyboard.update({ where: { id }, data: { reference_stills: refStills as unknown as Prisma.InputJsonValue } });
+            await upsertReferenceStill(db, id, entity.id, {
+              status: 'error', candidates: [], selected: existing[entity.id]?.selected ?? null, error: message,
+            });
             send({ type: 'entity_error', entityId: entity.id, message, durationMs: Date.now() - entityStart });
           }
         };
@@ -297,7 +310,7 @@ export async function POST(
           }),
         );
 
-        await getDb().storyboard.update({ where: { id }, data: { status: 'REFS_PENDING' } });
+        await db.storyboard.update({ where: { id }, data: { status: 'REFS_PENDING' } });
         send({ type: 'done', total: entitiesToGenerate.length });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
