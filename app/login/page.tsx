@@ -13,6 +13,8 @@ function LoginForm() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [needsInvite, setNeedsInvite] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -25,14 +27,19 @@ function LoginForm() {
     const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify(
+        mode === 'signup'
+          ? { email, password, inviteCode: inviteCode || undefined }
+          : { email, password },
+      ),
     });
 
     if (res.ok) {
       router.push(next);
       router.refresh();
     } else {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+      if (data.code === 'INVITE_REQUIRED') setNeedsInvite(true);
       setError(data.error ?? (mode === 'signin' ? 'Sign in failed.' : 'Sign up failed.'));
       setLoading(false);
     }
@@ -68,6 +75,16 @@ function LoginForm() {
               minLength={mode === 'signup' ? 8 : undefined}
               required
             />
+            {mode === 'signup' && needsInvite && (
+              <input
+                type="text"
+                placeholder="Invite code"
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value)}
+                className="w-full rounded-xl border border-stone-200 bg-white/70 px-4 py-3 text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-400 focus:border-transparent transition-colors"
+                required
+              />
+            )}
             {error && <p className="text-sm text-red-600">{error}</p>}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading

@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 const BodySchema = z.object({
   email: z.string().email().max(254),
   password: z.string().min(8, 'Password must be at least 8 characters').max(200),
+  inviteCode: z.string().max(200).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -24,6 +25,14 @@ export async function POST(request: NextRequest) {
   }
 
   const email = parsed.data.email.trim().toLowerCase();
+
+  // Optional invite gate: when SIGNUP_CODE is set, new accounts need it.
+  // Admin emails are exempt so the owner can always bootstrap.
+  const signupCode = process.env.SIGNUP_CODE;
+  if (signupCode && !adminEmails().includes(email) && parsed.data.inviteCode !== signupCode) {
+    return NextResponse.json({ error: 'An invite code is required to create an account', code: 'INVITE_REQUIRED' }, { status: 403 });
+  }
+
   const db = getDb();
 
   const existing = await db.user.findUnique({ where: { email }, select: { id: true } });
