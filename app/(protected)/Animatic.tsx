@@ -510,6 +510,8 @@ export function Animatic({ shots, shotKeyFrames, storyboardTitle }: AnimaticProp
                     src={url}
                     alt=""
                     crossOrigin="anonymous"
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                     draggable={false}
                   />

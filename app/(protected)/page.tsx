@@ -9,10 +9,21 @@ import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, Check, ImageIcon, Upload,
   Film, Download, ScanEye, Pencil, Bell, BellOff, X,
-  ChevronLeft, ChevronRight as ChevronRightIcon, Clapperboard,
+  ChevronLeft, ChevronRight as ChevronRightIcon,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { CameraArrows } from './CameraArrows';
-import { Animatic } from './Animatic';
+
+// Animatic carries canvas playback + MediaRecorder export (~600 lines) that
+// most sessions never reach — load it only when the tab is opened.
+const Animatic = dynamic(() => import('./Animatic').then((m) => m.Animatic), {
+  loading: () => (
+    <div className="flex items-center justify-center py-16 text-stone-400">
+      <Loader2 className="h-5 w-5 animate-spin" />
+    </div>
+  ),
+  ssr: false,
+});
 
 function toTitleCase(str: string): string {
   const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
@@ -26,8 +37,6 @@ import type { ImageModel } from '@/app/api/google-models/route';
 import type { ReferenceStills } from '@/src/lib/reference-stills';
 import type { ShotKeyFrames } from '@/app/api/storyboard/[id]/generate-shots/route';
 import type { ContinuityIssue, ContinuityCheckResult } from '@/app/api/storyboard/[id]/check-continuity/route';
-import { DevStatsPanel, EMPTY_DEV_STATS } from '@/src/components/dev-stats';
-import type { DevStats } from '@/src/components/dev-stats';
 import { RegenShotButton } from './RegenShotButton';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH' | 'STYLE_REF';
@@ -69,23 +78,23 @@ const PARSE_MILESTONES: { ms: number; text: string }[] = [
 
 function useProgressMessage(active: boolean, milestones: { ms: number; text: string }[]) {
   const [index, setIndex] = useState(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
+    const clearAll = () => {
+      for (const id of timersRef.current) clearTimeout(id);
+      timersRef.current = [];
+    };
     if (!active) {
       setIndex(0);
-      if (timerRef.current) clearTimeout(timerRef.current);
+      clearAll();
       return;
     }
     setIndex(0);
-    milestones.forEach((m, i) => {
-      if (i === 0) return;
-      const id = setTimeout(() => setIndex(i), m.ms);
-      timerRef.current = id;
-    });
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
+    timersRef.current = milestones
+      .map((m, i) => (i === 0 ? null : setTimeout(() => setIndex(i), m.ms)))
+      .filter((id): id is ReturnType<typeof setTimeout> => id !== null);
+    return clearAll;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
@@ -138,7 +147,6 @@ function HomePageInner() {
   const [showSyncLog, setShowSyncLog] = useState(false);
 
   // Dev timing stats
-  const [devStats, setDevStats] = useState<DevStats>(EMPTY_DEV_STATS);
 
   // VO line editing — shotNumber of the shot currently being edited, plus draft text
   const [editingVoShot, setEditingVoShot] = useState<number | null>(null);
@@ -336,7 +344,6 @@ function HomePageInner() {
     // Individual entities update to 'generating' as the SSE entity_start events arrive.
     setRefsCurrentEntity(null);
     setActiveTab('images');
-    setDevStats((prev) => ({ ...prev, refsStart: Date.now(), refsEnd: undefined, entities: [] }));
 
     let res: Response;
     try {
@@ -381,17 +388,11 @@ function HomePageInner() {
 
           if (payload['type'] === 'entity_start') {
             const entityId = payload['entityId'] as string;
-            const entityName = payload['entityName'] as string;
-            const entityType = payload['entityType'] as string;
             setRefsCurrentEntity(entityId);
             setRefStills((prev) => ({
               ...prev,
               // Preserve selected so hasAnyApproved stays true during generation.
               [entityId]: { status: 'generating', candidates: prev[entityId]?.candidates ?? [], selected: prev[entityId]?.selected ?? null },
-            }));
-            setDevStats((prev) => ({
-              ...prev,
-              entities: [...prev.entities, { id: entityId, name: entityName, type: entityType, startMs: Date.now() }],
             }));
           } else if (payload['type'] === 'entity_candidate') {
             // A single candidate arrived — show it immediately without waiting for all 4
@@ -407,36 +408,21 @@ function HomePageInner() {
           } else if (payload['type'] === 'entity_done') {
             const entityId = payload['entityId'] as string;
             const candidates = payload['candidates'] as string[];
-            const durationMs = payload['durationMs'] as number | undefined;
             setRefsCurrentEntity(null);
             setRefStills((prev) => ({
               ...prev,
               [entityId]: { status: 'done', candidates, selected: prev[entityId]?.selected ?? null },
             }));
-            setDevStats((prev) => ({
-              ...prev,
-              entities: prev.entities.map((e) =>
-                e.id === entityId ? { ...e, durationMs, candidateCount: candidates.length } : e,
-              ),
-            }));
           } else if (payload['type'] === 'entity_error') {
             const entityId = payload['entityId'] as string;
             const message = payload['message'] as string;
-            const durationMs = payload['durationMs'] as number | undefined;
             setRefsCurrentEntity(null);
             setRefStills((prev) => ({
               ...prev,
               // Preserve selected so a failed candidate doesn't wipe an approved image.
               [entityId]: { status: 'error', candidates: prev[entityId]?.candidates ?? [], selected: prev[entityId]?.selected ?? null, error: message },
             }));
-            setDevStats((prev) => ({
-              ...prev,
-              entities: prev.entities.map((e) =>
-                e.id === entityId ? { ...e, durationMs, error: message } : e,
-              ),
-            }));
           } else if (payload['type'] === 'done') {
-            setDevStats((prev) => ({ ...prev, refsEnd: Date.now() }));
             setState((prev) =>
               prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
             );
@@ -730,13 +716,6 @@ function HomePageInner() {
               prev.phase === 'parsing' ? { ...prev, charsGenerated: chars } : prev,
             );
           } else if (payload['type'] === 'done') {
-            const usage = payload['usage'] as { input_tokens?: number; output_tokens?: number } | undefined;
-            setDevStats((prev) => ({
-              ...prev,
-              parseEnd: Date.now(),
-              parseInputTokens: usage?.input_tokens,
-              parseOutputTokens: usage?.output_tokens,
-            }));
             setState({
               phase: 'parsed',
               id,
@@ -806,8 +785,6 @@ function HomePageInner() {
     if (!script.trim()) return;
     setState({ phase: 'generating', markdown: '' });
     setActiveTab('storyboard');
-    const genStart = Date.now();
-    setDevStats({ ...EMPTY_DEV_STATS, generateStart: genStart });
 
     let res: Response;
     try {
@@ -873,7 +850,6 @@ function HomePageInner() {
             const { id, title, markdown } = payload as {
               id: string; title: string; markdown: string; type: string;
             };
-            setDevStats((prev) => ({ ...prev, generateEnd: Date.now(), parseStart: Date.now() }));
             await doParse(id, title, markdown);
             return;
           } else if (payload['type'] === 'error') {
@@ -902,7 +878,6 @@ function HomePageInner() {
         if (check.ok) {
           const data = await check.json() as { status?: string; source_markdown?: string; title?: string };
           if (data.status === 'DRAFT' && data.source_markdown) {
-            setDevStats((prev) => ({ ...prev, generateEnd: Date.now(), parseStart: Date.now() }));
             await doParse(sbId, data.title ?? 'Untitled', data.source_markdown);
             return;
           }
@@ -1181,7 +1156,7 @@ function HomePageInner() {
                 {styleRefUrl ? (
                   <div className="flex items-start gap-3">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={styleRefUrl} alt="Style reference" className="w-16 h-16 object-cover rounded-lg flex-shrink-0" />
+                    <img src={styleRefUrl} alt="Style reference" loading="lazy" decoding="async" className="w-16 h-16 object-cover rounded-lg flex-shrink-0" />
                     <div className="flex-1 min-w-0 space-y-1.5">
                       <p className="text-xs text-stone-600 font-medium">Style reference uploaded</p>
                       <p className="text-xs text-stone-400">This image will guide the visual style of all generated frames.</p>
@@ -1703,6 +1678,8 @@ function HomePageInner() {
                     <img
                       src={displayUrl}
                       alt={`Shot ${n} — ${shot.descriptor as string}`}
+                      loading="lazy"
+                      decoding="async"
                       className="w-full aspect-video object-cover"
                     />
                   ) : (
@@ -2167,7 +2144,7 @@ function EntityCard({
                   }`}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt={`${entity.name} candidate ${i + 1}`} className="w-full h-full object-cover" />
+                  <img src={url} alt={`${entity.name} candidate ${i + 1}`} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                   {isSelected ? (
                     <div className="absolute inset-0 bg-stone-900/20 flex items-center justify-center">
                       <div className="bg-stone-900 rounded-full p-1">
