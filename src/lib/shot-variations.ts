@@ -29,6 +29,7 @@ export const SHOT_VARIATION_GROUPS: VariationGroup[] = [
     id: 'angle',
     label: 'Angle',
     variations: [
+      { id: 'three_quarter', label: '3/4 angle', prompt: 'Front three-quarter angle on the subject — camera roughly 45 degrees off the subject\'s facing direction, both eyes visible with one side of the face favoured, the far side foreshortened. The classic dimensional coverage angle: never flat-on, never full profile. Keep the subject\'s established screen side and eyeline direction.' },
       { id: 'low', label: 'Low angle', prompt: 'Low camera angle looking up — subjects dominant, powerful, looming.' },
       { id: 'high', label: 'High angle', prompt: 'High camera angle looking down — subjects small, vulnerable, observed.' },
       { id: 'dutch', label: 'Dutch tilt', prompt: 'Canted Dutch angle — frame tilted, psychological unease or disorientation.' },
