@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, Suspense } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/src/components/ui/button';
 import { Textarea } from '@/src/components/ui/textarea';
@@ -9,11 +9,12 @@ import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, Check, ImageIcon, Upload,
   Film, Download, ScanEye, Pencil, Bell, BellOff, X,
-  ChevronLeft, ChevronRight as ChevronRightIcon,
+  ChevronLeft, ChevronRight as ChevronRightIcon, Plus, GripVertical,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { CameraArrows } from './CameraArrows';
 import { ExportMenu } from './ExportMenu';
+import { InsertFrameDialog } from './InsertFrameDialog';
 
 // Animatic carries canvas playback + MediaRecorder export (~600 lines) that
 // most sessions never reach — load it only when the tab is opened.
@@ -162,6 +163,10 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
 
   // Camera movement arrows overlay (boards tab)
   const [showArrows, setShowArrows] = useState(false);
+  // Manual frame insertion + drag reorder (boards tab)
+  const [insertAt, setInsertAt] = useState<number | null>(null); // 1-based position
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null); // 0-based
+  const [dragOverZone, setDragOverZone] = useState<number | null>(null); // zone index
 
   // Shot version history — shotNumber → index of currently displayed history item
   // 0 = current (latest), 1 = previous, 2 = two renders ago, …
@@ -337,6 +342,77 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ entityId, selectedUrl: url }),
     });
+  }
+
+  // ── Manual frame insertion + reorder ───────────────────────────────────────
+
+  /** Re-pull parsed_json + frames after a server-side insert/reorder. */
+  async function refreshBoard(storyboardId: string) {
+    const r = await fetch(`/api/storyboard/${storyboardId}`);
+    if (!r.ok) return;
+    const data = await r.json() as { parsed_json: unknown; shot_key_frames: ShotKeyFrames | null };
+    setState((prev) => ('parsedJson' in prev ? { ...prev, parsedJson: data.parsed_json } : prev));
+    setShotKeyFrames(data.shot_key_frames ?? {});
+    setShotHistoryIndex({});
+  }
+
+  /** After the server inserts the shot, refresh state and render the new frame. */
+  async function handleInserted(storyboardId: string, shotNumber: number) {
+    setInsertAt(null);
+    await refreshBoard(storyboardId);
+    const key = String(shotNumber);
+    setShotKeyFrames((prev) => ({ ...prev, [key]: { status: 'generating', url: null } }));
+    try {
+      const res = await fetch(`/api/storyboard/${storyboardId}/regen-shot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shotNumber, variations: [] }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { url: string };
+        setShotKeyFrames((prev) => ({ ...prev, [key]: { status: 'done', url: data.url } }));
+      } else {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setShotKeyFrames((prev) => ({ ...prev, [key]: { status: 'error', url: null, error: data.error ?? 'Render failed — use ↺ to retry' } }));
+      }
+    } catch {
+      setShotKeyFrames((prev) => ({ ...prev, [key]: { status: 'error', url: null, error: 'Network error — use ↺ to retry' } }));
+    }
+  }
+
+  /** Drop handler: move the dragged card so it lands at zone `zoneIdx`. */
+  async function reorderShot(storyboardId: string, fromIdx: number, zoneIdx: number) {
+    if (!('parsedJson' in state)) return;
+    const toIdx = zoneIdx > fromIdx ? zoneIdx - 1 : zoneIdx;
+    if (toIdx === fromIdx) return;
+
+    // Optimistic local reorder — shots renumber sequentially, frames remap.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shots = [...(state.parsedJson as any).shots];
+    const [moved] = shots.splice(fromIdx, 1);
+    shots.splice(toIdx, 0, moved);
+    const mapping = new Map<number, number>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    shots.forEach((s: any, i: number) => mapping.set(s.shot_number as number, i + 1));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const renumbered = shots.map((s: any, i: number) => ({ ...s, shot_number: i + 1 }));
+    const nextFrames: ShotKeyFrames = {};
+    for (const [k, v] of Object.entries(shotKeyFrames)) {
+      nextFrames[String(mapping.get(Number(k)) ?? k)] = v;
+    }
+    setState({ ...state, parsedJson: { ...(state.parsedJson as object), shots: renumbered } } as typeof state);
+    setShotKeyFrames(nextFrames);
+    setShotHistoryIndex({});
+    // Continuity issue shot numbers are stale after a reorder — clear them.
+    setContinuityIssues([]);
+    setContinuitySummary(null);
+
+    const res = await fetch(`/api/storyboard/${storyboardId}/shots`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: fromIdx + 1, to: toIdx + 1 }),
+    });
+    if (!res.ok) await refreshBoard(storyboardId); // resync on failure
   }
 
   async function startGeneration(id: string, force = false) {
@@ -1669,7 +1745,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             </div>
           )}
           {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-          {(state.parsedJson?.shots ?? []).map((shot: any) => {
+          {(state.parsedJson?.shots ?? []).map((shot: any, shotIdx: number) => {
             const n = String(shot.shot_number as number);
             const frame = shotKeyFrames[n];
             // Version history — index 0 = current render, 1 = previous, etc.
@@ -1680,9 +1756,37 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             const displayUrl = allUrls[histIdx] ?? null;
             const hasHistory = allUrls.length > 1;
             return (
-              <div key={n} className="glass rounded-xl overflow-hidden">
+              <div key={n}>
+                {/* Insert / drop zone above this card */}
+                {'id' in state && !shotsGenerating && (
+                  <InsertZoneRow
+                    dragging={draggingIdx !== null}
+                    active={dragOverZone === shotIdx}
+                    onInsert={() => setInsertAt(shotIdx + 1)}
+                    onDragEnter={() => setDragOverZone(shotIdx)}
+                    onDrop={() => {
+                      const f = draggingIdx;
+                      setDraggingIdx(null);
+                      setDragOverZone(null);
+                      if (f !== null && 'id' in state) void reorderShot(state.id, f, shotIdx);
+                    }}
+                  />
+                )}
+                <div className={`glass rounded-xl overflow-hidden relative group/card transition-opacity ${draggingIdx === shotIdx ? 'opacity-40' : ''}`}>
                 {/* Image area — relative so overlays can be absolutely positioned */}
                 <div className="relative">
+                  {/* Drag handle — reorder by dragging into a zone */}
+                  {'id' in state && !shotsGenerating && (
+                    <div
+                      draggable
+                      onDragStart={(e) => { setDraggingIdx(shotIdx); e.dataTransfer.effectAllowed = 'move'; }}
+                      onDragEnd={() => { setDraggingIdx(null); setDragOverZone(null); }}
+                      className="absolute top-2 left-2 z-10 h-7 w-7 flex items-center justify-center rounded-full bg-white/80 shadow-sm cursor-grab active:cursor-grabbing opacity-0 group-hover/card:opacity-100 transition-opacity"
+                      title="Drag to reorder"
+                    >
+                      <GripVertical className="h-3.5 w-3.5 text-stone-600" />
+                    </div>
+                  )}
                   {frame?.status === 'done' && displayUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -1895,9 +1999,61 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                     </div>
                   )}
                 </div>
+                </div>
               </div>
             );
           })}
+
+          {/* Trailing add-frame target (also the end drop zone while dragging) */}
+          {'id' in state && shotsTotal > 0 && !shotsGenerating && 'parsedJson' in state && (
+            <div
+              className="flex justify-center pt-1"
+              onDragOver={(e) => {
+                if (draggingIdx === null) return;
+                e.preventDefault();
+                setDragOverZone((state.parsedJson?.shots ?? []).length);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const f = draggingIdx;
+                const zone = (state.parsedJson?.shots ?? []).length;
+                setDraggingIdx(null);
+                setDragOverZone(null);
+                if (f !== null) void reorderShot(state.id, f, zone);
+              }}
+            >
+              {draggingIdx !== null ? (
+                <div className={`w-full mx-1 rounded-full transition-all ${dragOverZone === (state.parsedJson?.shots ?? []).length ? 'h-1.5 bg-stone-900' : 'h-0.5 bg-stone-300'}`} />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setInsertAt((state.parsedJson?.shots ?? []).length + 1)}
+                  className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-700 border border-dashed border-stone-300 hover:border-stone-500 rounded-full px-3 py-1.5 transition-colors bg-white/50"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add frame
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Insert-frame composer */}
+          {insertAt !== null && 'id' in state && 'parsedJson' in state && (
+            <InsertFrameDialog
+              storyboardId={state.id}
+              position={insertAt}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              characters={((state.parsedJson as any).characters ?? []).map((c: any) => ({ id: c.id as string, name: c.name as string }))}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              locations={((state.parsedJson as any).locations ?? []).map((l: any) => ({ id: l.id as string, name: l.name as string }))}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              props={((state.parsedJson as any).props ?? []).map((pr: any) => ({ id: pr.id as string, name: pr.name as string }))}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              defaultLocationId={((state.parsedJson as any).shots ?? [])[Math.max(0, insertAt - 2)]?.continuity?.location_id ?? null}
+              onClose={() => setInsertAt(null)}
+              onInserted={(sn) => { void handleInserted(state.id, sn); }}
+            />
+          )}
         </div>
       )}
 
@@ -2211,6 +2367,43 @@ function EntitySection({ title, entities, storyboardId, refStills, onApprove, on
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── Insert / drop zone between shot cards ───────────────────────────────────
+
+function InsertZoneRow({
+  dragging,
+  active,
+  onInsert,
+  onDragEnter,
+  onDrop,
+}: {
+  dragging: boolean;
+  active: boolean;
+  onInsert: () => void;
+  onDragEnter: () => void;
+  onDrop: () => void;
+}) {
+  return (
+    <div
+      className={`group/zone relative flex items-center justify-center transition-all ${dragging ? 'h-8' : 'h-5 -my-1'}`}
+      onDragOver={(e) => { if (dragging) { e.preventDefault(); onDragEnter(); } }}
+      onDrop={(e) => { e.preventDefault(); onDrop(); }}
+    >
+      {dragging ? (
+        <div className={`w-full mx-1 rounded-full transition-all ${active ? 'h-1.5 bg-stone-900' : 'h-0.5 bg-stone-300'}`} />
+      ) : (
+        <button
+          type="button"
+          onClick={onInsert}
+          className="opacity-0 group-hover/zone:opacity-100 focus:opacity-100 transition-opacity flex items-center gap-1 px-2.5 py-1 rounded-full border border-dashed border-stone-300 bg-white/90 text-xs text-stone-500 hover:text-stone-900 hover:border-stone-500 shadow-sm"
+        >
+          <Plus className="h-3 w-3" />
+          Add frame
+        </button>
+      )}
     </div>
   );
 }
