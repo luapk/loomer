@@ -23,6 +23,10 @@ function buildPrompt(
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `Style: ${WATERCOLOUR_STYLE}\n\n${basePrompt}`;
   }
+  if (renderStyle === 'STYLE_REF') {
+    // Style is carried by the conditioning image — see generateOneImage.
+    return basePrompt;
+  }
   return `Style: ${PHOTOREAL_STYLE}\n\n${basePrompt}`;
 }
 
@@ -30,13 +34,22 @@ async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
+  styleRefImage: { data: string; mimeType: string } | null = null,
 ): Promise<{ data: string; mimeType: string }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
+  const parts: any[] = [];
+  if (styleRefImage) {
+    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. This image defines the output medium — do NOT copy any characters, objects, locations, or composition from it.]' });
+    parts.push({ inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } });
+  }
+  parts.push({ text: prompt });
+
   const delays = [5000, 15000, 30000];
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     try {
       const response = await ai.models.generateContent({
         model,
-        contents: prompt,
+        contents: [{ role: 'user', parts }],
         config: { responseModalities: [Modality.IMAGE] },
       });
       const candidate = response.candidates?.[0];
@@ -90,7 +103,7 @@ export async function POST(
   const db = getDb();
   const storyboard = await db.storyboard.findUnique({
     where: { id },
-    select: { parsed_json: true, image_model: true, render_style: true },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
   });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
@@ -137,12 +150,28 @@ export async function POST(
 
   const ai = new GoogleGenAI({ apiKey });
 
+  // STYLE_REF mode: fetch the style reference once so fine-tuned alts match
+  // the uploaded style instead of falling back to the house photoreal look.
+  let styleRefImage: { data: string; mimeType: string } | null = null;
+  if (renderStyle === 'STYLE_REF' && storyboard.style_ref_url) {
+    try {
+      const res = await fetch(storyboard.style_ref_url);
+      if (res.ok) {
+        const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+        styleRefImage = {
+          data: Buffer.from(await res.arrayBuffer()).toString('base64'),
+          mimeType: contentType.split(';')[0]?.trim() ?? 'image/jpeg',
+        };
+      }
+    } catch { /* fall back to prompt-only */ }
+  }
+
   // Generate both candidates in parallel — halves user-facing latency; each
   // has its own 429 retry chain inside generateOneImage.
   const timestamp = Date.now();
   const results = await Promise.allSettled(
     [0, 1].map(async (j) => {
-      const img = await generateOneImage(ai, model, finalPrompt);
+      const img = await generateOneImage(ai, model, finalPrompt, styleRefImage);
       const buffer = Buffer.from(img.data, 'base64');
       const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
       const blob = await put(
