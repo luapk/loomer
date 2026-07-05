@@ -36,7 +36,22 @@ function buildGrammarLine(grammar: ParsedStoryboard['shots'][number]['grammar'])
     `lens ${grammar.lens}`,
     `screen direction ${grammar.screen_direction}`,
   ];
-  return `CAMERA GRAMMAR (authoritative — the frame's composition, perspective, and camera placement MUST follow this, never the geometry of any reference image): ${bits.join(', ')}.`;
+  // Spatial staging comes from the storyboard skill's film grammar — the
+  // triangle system, line of interest, and 30-degree adjacency. Stating it
+  // explicitly (with the rules it implies) is what keeps character-to-camera
+  // and character-to-character geography consistent across cuts.
+  const staging = [
+    grammar.line_of_interest ? `The line of interest (axis) runs: ${grammar.line_of_interest}.` : '',
+    grammar.triangle_position ? `Camera position in the triangle system: ${grammar.triangle_position}.` : '',
+    grammar.thirty_degree_check ? `Relation to adjacent shots: ${grammar.thirty_degree_check}.` : '',
+  ].filter(Boolean).join(' ');
+  return (
+    `CAMERA GRAMMAR (authoritative — the frame's composition, perspective, and camera placement MUST follow this, never the geometry of any reference image): ${bits.join(', ')}.\n` +
+    `SPATIAL STAGING (authoritative — classical film grammar, obey exactly): ${staging} ` +
+    'Apply the 180-degree rule: the camera stays on its established side of the line of interest, so every character holds the SAME screen side (left/right) and the SAME eyeline direction they hold in adjacent shots of this scene. ' +
+    'Characters looking at each other must have opposing eyelines (one looks frame-left, the other frame-right). ' +
+    'Foreground/background depth, relative distances between characters, and their positions within the set must stay consistent with the described geography — never mirror, flip, or restage the scene.'
+  );
 }
 
 function buildShotPrompt(

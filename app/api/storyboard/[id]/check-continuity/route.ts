@@ -60,11 +60,14 @@ const SYSTEM_PROMPT = `You are a professional film continuity supervisor with de
 
 You will be shown a sequence of storyboard frames from a single scene (same location), along with their shot metadata. Your job is to identify continuity violations — specifically cases where the visual execution breaks spatial logic the viewer would track.
 
+Each shot's metadata includes its DECLARED film grammar: the line of interest (axis), the camera's triangle-system position, screen direction, and the 30-degree adjacency note. Treat the declared grammar as the ground truth the rendered frame must satisfy — check the image AGAINST it, not just against the neighbouring images.
+
 Check for:
-1. **180-degree rule violations** — characters swapping screen sides (left↔right) between cuts, without an axis-crossing shot
+1. **180-degree rule violations** — characters swapping screen sides (left↔right) between cuts, without an axis-crossing shot. Use the declared line of interest: if the camera is declared on one side of the axis, verify the rendered frame is consistent with that side.
 2. **Eyeline mismatches** — in dialogue, if A looks screen-right toward B, then B should look screen-left toward A; flag reversals
-3. **Spatial geography** — a character or object placed near one part of the room in one shot appearing in an inconsistent position in the next
-4. **Screen direction** — a character moving left-to-right should continue left-to-right in the next shot (unless cut away)
+3. **Spatial geography** — a character or object placed near one part of the room in one shot appearing in an inconsistent position in the next; also flag frames whose staging contradicts their own declared triangle position (e.g. declared external reverse but rendered head-on)
+4. **Screen direction** — a character moving left-to-right should continue left-to-right in the next shot (unless cut away); verify the rendered frame matches its declared screen direction
+5. **Character-to-camera distance** — a declared CU that renders as a wide, or vice versa, breaks the scene's spatial rhythm; flag only clear mismatches
 
 Do NOT flag:
 - Differences that are intentional cut-aways or inserts
@@ -123,7 +126,7 @@ async function checkScene(
       .join(', ');
     content.push({
       type: 'text',
-      text: `\nShot ${shot.shot_number} — ${shot.descriptor}\nScale: ${shot.grammar.scale} | Angle: ${shot.grammar.angle} | Move: ${shot.grammar.camera_move} | Screen direction: ${shot.grammar.screen_direction}\nCharacters: ${charNames || 'none'}\nDescription: ${shot.key_frame_prompt.slice(0, 300)}`,
+      text: `\nShot ${shot.shot_number} — ${shot.descriptor}\nScale: ${shot.grammar.scale} | Angle: ${shot.grammar.angle} | Move: ${shot.grammar.camera_move} | Screen direction: ${shot.grammar.screen_direction}\nDeclared axis (line of interest): ${shot.grammar.line_of_interest}\nTriangle position: ${shot.grammar.triangle_position} | 30° adjacency: ${shot.grammar.thirty_degree_check}\nCharacters: ${charNames || 'none'}\nDescription: ${shot.key_frame_prompt.slice(0, 300)}`,
     });
     content.push({ type: 'image', source: { type: 'base64', media_type: img.mimeType, data: img.data } });
   }
