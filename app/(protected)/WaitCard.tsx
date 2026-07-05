@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Coffee, Clapperboard } from 'lucide-react';
 import { FILM_FACTS } from '@/src/lib/film-facts';
 
-const FACT_INTERVAL_MS = 14000;
+const FACT_INTERVAL_MS = 28000;
 const FADE_MS = 400;
 
 /** Fisher–Yates shuffle so a session walks the facts in random order without repeats. */
