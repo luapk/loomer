@@ -15,6 +15,7 @@ import dynamic from 'next/dynamic';
 import { CameraArrows } from './CameraArrows';
 import { ExportMenu } from './ExportMenu';
 import { InsertFrameDialog } from './InsertFrameDialog';
+import { WaitCard } from './WaitCard';
 
 // Animatic carries canvas playback + MediaRecorder export (~600 lines) that
 // most sessions never reach — load it only when the tab is opened.
@@ -1496,6 +1497,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                   <X className="h-3 w-3 mr-1" />Cancel
                 </Button>
               </div>
+              <WaitCard estimate="Writing the storyboard usually takes 2–4 minutes." />
               <pre className="text-xs font-mono text-stone-600 bg-stone-50/60 rounded-xl p-4 overflow-auto max-h-[500px] whitespace-pre-wrap leading-relaxed border border-stone-100">
                 {'markdown' in state ? state.markdown : ''}
                 <span className="inline-block w-1.5 h-3 bg-stone-400 animate-pulse ml-0.5 align-middle" />
@@ -1518,7 +1520,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                   <X className="h-3 w-3 mr-1" />Cancel
                 </Button>
               </div>
-              <p className="text-xs text-stone-400">This runs on our server — you can leave this page open and come back.</p>
+              <WaitCard estimate="Shot breakdown usually takes 1–2 minutes." />
             </div>
           )}
 
