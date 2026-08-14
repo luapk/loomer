@@ -106,7 +106,10 @@ export async function POST(request: NextRequest) {
         // that prompt, cutting ~30% off time-to-first-token.
         const messageStream = client.beta.promptCaching.messages.stream({
           model: MODEL,
-          max_tokens: 20000,
+          // Sonnet 4.6's ceiling. A shot block runs ~1,400 tokens, so 20k
+          // silently truncated boards at ~19 shots — this fits 45 with the
+          // Bible on top. Safe because the request is streamed.
+          max_tokens: 128000,
           system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
           messages: [{ role: 'user', content: script }],
         });
@@ -117,8 +120,17 @@ export async function POST(request: NextRequest) {
           send({ type: 'chunk', text: textDelta });
         });
 
-        await messageStream.finalMessage();
+        const finalMessage = await messageStream.finalMessage();
         const markdown = fullText;
+
+        // Truncation is silent otherwise: the markdown just stops mid-shot and
+        // the parser reads a short board as if it were the whole thing.
+        if (finalMessage.stop_reason === 'max_tokens') {
+          send({
+            type: 'warning',
+            message: 'The storyboard hit the output limit and may be cut short — try a shorter script or fewer scenes.',
+          });
+        }
 
         const titleMatch = /^#\s+(.+)$/m.exec(markdown);
         const rawTitle = titleMatch?.[1]?.trim() ?? 'Untitled';
