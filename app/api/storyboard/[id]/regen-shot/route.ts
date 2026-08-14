@@ -3,23 +3,27 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
-import { loadStyleSummary, styleDirective } from '@/src/lib/styles';
+import {
+  loadStyleContext,
+  shotStyleLine,
+  styleDeclaration,
+  type StyleContext,
+} from '@/src/lib/style-context';
 import { isVoiceOnlyCharacter } from '@/src/lib/character-identity';
 import { uniqueVisualLabels } from '@/src/lib/entity-labels';
 import { getReferenceStills, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imageCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
-import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
 // ---------------------------------------------------------------------------
-// Style helpers (duplicated from generate-shots — do NOT import from there)
+// Prompt assembly. Style text comes from src/lib/style-context.ts, shared with
+// generate-shots, so a regenerated frame is stated the same way as the frames
+// it sits between. The grammar and single-frame guards below are still
+// duplicated from generate-shots.
 // ---------------------------------------------------------------------------
-
-const WATERCOLOUR_STYLE =
-  'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
 
 
 // Single-frame guard — see generate-shots/route.ts for rationale.
@@ -60,37 +64,12 @@ function buildGrammarLine(grammar: ParsedStoryboard['shots'][number]['grammar'])
 
 function buildShotPrompt(
   keyFramePrompt: string,
-  renderStyle: string,
-  styleLock: ParsedStoryboard['style_lock'],
+  style: StyleContext,
   grammar?: ParsedStoryboard['shots'][number]['grammar'],
 ): string {
   const grammarLine = grammar ? `${buildGrammarLine(grammar)}\n\n` : '';
-  if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
-  }
-  if (renderStyle === 'STYLE_REF') {
-    // Style comes from the directive + reference images. Emitting the photoreal
-    // block here would contradict them outright.
-    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${keyFramePrompt}`;
-  }
-  const dofLine = grammar ? `${buildDofLine(grammar.scale)} ` : '';
-  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_STYLE} ${dofLine}\n\n${keyFramePrompt}`;
-}
-
-function buildStyleDeclaration(
-  renderStyle: string,
-  _styleLock: ParsedStoryboard['style_lock'],
-  grammar?: ParsedStoryboard['shots'][number]['grammar'],
-  styleSummary: string | null = null,
-): string {
-  if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
-  }
-  if (renderStyle === 'STYLE_REF') {
-    return styleDirective(styleSummary);
-  }
-  const dofLine = grammar ? ` ${buildDofLine(grammar.scale)}` : '';
-  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dofLine} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  const styleLine = shotStyleLine(style, grammar?.scale);
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${styleLine ? `${styleLine}\n\n` : ''}${keyFramePrompt}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,10 +101,8 @@ async function generateOneShot(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-  styleDeclaration: string,
+  declaration: string,
   conditioningEntities: { name: string; url: string }[],
-  _prevFrameResult: null = null,
-  styleRefImages: { data: string; mimeType: string }[] = [],
 ): Promise<{ data: string; mimeType: string } | null> {
   const entityResults = await Promise.all(
     conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
@@ -139,16 +116,9 @@ async function generateOneShot(
   const parts: any[] = [];
 
   // Style declaration first — anchors the output medium before the model sees
-  // any photographic reference images.
-  parts.push({ text: styleDeclaration });
-
-  // Style reference image (STYLE_REF mode) — injected after the style declaration.
-  if (styleRefImages.length > 0) {
-    parts.push({ text: '[STYLE REFERENCE — LOOK ONLY, LOWEST CONTENT PRIORITY. Reproduce the colour palette, lighting quality, rendering technique, texture, line quality and overall aesthetic of the image(s) below. They define HOW the frame is rendered and NOTHING about what it contains. Do NOT take any character, face, body, costume, object, location or composition from them. Where a style image and an identity reference disagree about how something LOOKS AS A THING, the identity reference always wins; the style images only govern the medium.]' });
-    for (const img of styleRefImages) {
-      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
-    }
-  }
+  // any photographic reference images. In STYLE_REF mode it is the only carrier
+  // of the look; a shot prompt gets identity references and nothing else.
+  parts.push({ text: declaration });
 
   if (loadedEntities.length > 0) {
     parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define ONLY the visual appearance of each entity — its shape, colour, texture, materials, and distinguishing features. Extract this visual identity and render it in the OUTPUT STYLE declared above. DO NOT copy the spatial position, orientation, camera angle, perspective geometry, or compositional arrangement from any reference image. The shot description governs ALL composition — where entities are placed, which direction they face, how the camera frames the scene. References answer "what does it look like?" only; the shot prompt answers "how is the scene composed?". DISREGARD any colour, material, or appearance adjective in the prompt text for these entities — the reference image overrides it. Do NOT copy the photographic medium of the references.]' });
@@ -253,7 +223,6 @@ export async function POST(
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
   const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
-  const renderStyle = storyboard.render_style;
 
   const shot = parsed.shots.find((s) => s.shot_number === shotNumber);
   if (!shot) {
@@ -278,6 +247,12 @@ export async function POST(
     ...parsed.props.map((p) => ({ id: p.id, prompt: p.name })),
   ]);
 
+  // The same style context generate-shots builds, so a regenerated frame is
+  // stated identically to the frames either side of it. No images: in
+  // STYLE_REF mode the look travels as text.
+  const style = await loadStyleContext(getDb(), storyboard, { withImages: false });
+  const declaration = styleDeclaration(style, shot.grammar.scale);
+
   // Build prompt — use override text if provided, otherwise the storyboard key frame prompt.
   // Style prefix always comes first; Director's note variations are appended regardless.
   const keyFrameText = overridePrompt?.trim() ? overridePrompt.trim() : shot.key_frame_prompt;
@@ -285,7 +260,7 @@ export async function POST(
   // cinematographic variation (POV, low angle, OTS…) deliberately departs
   // from the storyboard's grammar and must not be contradicted by it.
   const grammarForRegen = variations.length > 0 ? undefined : shot.grammar;
-  let prompt = buildShotPrompt(keyFrameText, renderStyle, parsed.style_lock, grammarForRegen);
+  let prompt = buildShotPrompt(keyFrameText, style, grammarForRegen);
   if (variations.length > 0) {
     // For OTS / dirty-single variations, inject the shot's character names so the model
     // knows which character to blur vs keep in focus.
@@ -342,18 +317,6 @@ export async function POST(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // Fetch the style's images once for STYLE_REF mode.
-  // Capped hard: style images compete with identity references inside the same
-  // prompt, and past ~2 the model starts taking content from them. The written
-  // summary carries the rest of the style.
-  // Deliberately empty — see generate-shots. Style travels as text in
-  // STYLE_REF mode so identity references are the only images in the prompt.
-  const styleRefImages: { data: string; mimeType: string }[] = [];
-  const styleSummary = renderStyle === 'STYLE_REF'
-    ? await loadStyleSummary(db, storyboard)
-    : null;
-
-  const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar, styleSummary);
 
   // Charge for the one image, refunded below if the model doesn't deliver.
   let chargedCredits = 0;
@@ -373,7 +336,7 @@ export async function POST(
 
   let img: { data: string; mimeType: string } | null;
   try {
-    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, null, styleRefImages);
+    img = await generateOneShot(ai, model, prompt, declaration, conditioningEntities);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await refundCharge(`Shot ${shotNumber} regen failed`);

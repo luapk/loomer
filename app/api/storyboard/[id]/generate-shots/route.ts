@@ -3,13 +3,17 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
-import { loadStyleSummary, styleDirective } from '@/src/lib/styles';
+import {
+  loadStyleContext,
+  shotStyleLine,
+  styleDeclaration,
+  type StyleContext,
+} from '@/src/lib/style-context';
 import { isVoiceOnlyCharacter } from '@/src/lib/character-identity';
 import { uniqueVisualLabels } from '@/src/lib/entity-labels';
 import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
-import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
@@ -23,12 +27,10 @@ export type { ShotKeyFrames } from '@/src/lib/frame-store';
 import type { ShotKeyFrames } from '@/src/lib/frame-store';
 
 // ---------------------------------------------------------------------------
-// Style helpers
+// Prompt assembly. All style text comes from src/lib/style-context.ts so this
+// route, regen-shot, and both reference-still routes state the look the same
+// way — see the note at the top of that file.
 // ---------------------------------------------------------------------------
-
-const WATERCOLOUR_STYLE =
-  'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
-
 
 // Single-frame guard prepended to every shot prompt. A key_frame_prompt that
 // carries editorial cross-cut language ("match cut", "intercut", references to
@@ -71,40 +73,12 @@ function buildGrammarLine(grammar: ParsedStoryboard['shots'][number]['grammar'])
 
 function buildShotPrompt(
   keyFramePrompt: string,
-  renderStyle: string,
-  styleLock: ParsedStoryboard['style_lock'],
+  style: StyleContext,
   grammar?: ParsedStoryboard['shots'][number]['grammar'],
 ): string {
   const grammarLine = grammar ? `${buildGrammarLine(grammar)}\n\n` : '';
-  if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
-  }
-  if (renderStyle === 'STYLE_REF') {
-    // Style declaration is handled via a conditioning image; the prompt just
-    // carries the grammar guard and key-frame description.
-    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${keyFramePrompt}`;
-  }
-  const dofLine = grammar ? `${buildDofLine(grammar.scale)} ` : '';
-  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_STYLE} ${dofLine}\n\n${keyFramePrompt}`;
-}
-
-// Returns a style declaration placed BEFORE reference images so the model
-// anchors to the output medium before it sees any photographic references.
-// STYLE_REF mode uses a conditioning image for style — see generateOneShot.
-function buildStyleDeclaration(
-  renderStyle: string,
-  _styleLock: ParsedStoryboard['style_lock'],
-  grammar?: ParsedStoryboard['shots'][number]['grammar'],
-  styleSummary: string | null = null,
-): string {
-  if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
-  }
-  if (renderStyle === 'STYLE_REF') {
-    return styleDirective(styleSummary);
-  }
-  const dofLine = grammar ? ` ${buildDofLine(grammar.scale)}` : '';
-  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dofLine} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  const styleLine = shotStyleLine(style, grammar?.scale);
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${styleLine ? `${styleLine}\n\n` : ''}${keyFramePrompt}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +135,7 @@ async function generateOneShot(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-  styleDeclaration: string,
+  declaration: string,
   // Conditioning images are prefetched once per run (not per shot) and passed
   // in already loaded — see the imageCache in the route handler.
   conditioningEntities: { name: string; img: { data: string; mimeType: string } }[],
@@ -170,10 +144,6 @@ async function generateOneShot(
   // rather than reading it as a spatial reference. The style mismatch in
   // watercolour mode acts as a natural barrier against this.
   prevFrameUrl: string | null,
-  // styleRefImages are used in STYLE_REF mode — injected first as style-only
-  // conditioning images before any identity references. A named style carries
-  // up to 4.
-  styleRefImages: { data: string; mimeType: string }[] = [],
 ): Promise<{ data: string; mimeType: string } | null> {
   const prevFrameResult = prevFrameUrl ? await fetchImageAsBase64(prevFrameUrl) : null;
 
@@ -181,17 +151,10 @@ async function generateOneShot(
   const parts: any[] = [];
 
   // Style declaration comes FIRST — before any images — so the model anchors to
-  // the output medium before it sees photographic references.
-  parts.push({ text: styleDeclaration });
-
-  // Style reference image (STYLE_REF mode) — injected immediately after the
-  // style declaration so the medium is locked before identity refs are shown.
-  if (styleRefImages.length > 0) {
-    parts.push({ text: '[STYLE REFERENCE — LOOK ONLY, LOWEST CONTENT PRIORITY. Reproduce the colour palette, lighting quality, rendering technique, texture, line quality and overall aesthetic of the image(s) below. They define HOW the frame is rendered and NOTHING about what it contains. Do NOT take any character, face, body, costume, object, location or composition from them. Where a style image and an identity reference disagree about how something LOOKS AS A THING, the identity reference always wins; the style images only govern the medium.]' });
-    for (const img of styleRefImages) {
-      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
-    }
-  }
+  // the output medium before it sees photographic references. In STYLE_REF mode
+  // it is the only carrier of the look: the identity references are the only
+  // images a shot prompt gets.
+  parts.push({ text: declaration });
 
   // Spatial continuity reference — only used in watercolour mode where the
   // pencil-sketch output style is sufficiently different from a photographic
@@ -289,26 +252,18 @@ export async function POST(
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
   const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
-  const renderStyle = storyboard.render_style;
 
   const refStills = await getReferenceStills(db, id);
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
 
-  // Fetch the style's images once for STYLE_REF mode.
-  // Capped hard: style images compete with identity references inside the same
-  // prompt, and past ~2 the model starts taking content from them. The written
-  // summary carries the rest of the style.
-  // Deliberately empty. Style images alongside identity references wrecked
-  // character continuity even capped at two — the model kept sourcing content
-  // from them. In STYLE_REF mode the style now travels as text only (the
-  // written summary), and the only images in a shot prompt are identity
-  // references. Reference stills still use the images: nothing competes there,
-  // and they carry the look into every character before shots are rendered.
-  const styleRefImages: { data: string; mimeType: string }[] = [];
-  const styleSummary = renderStyle === 'STYLE_REF'
-    ? await loadStyleSummary(db, storyboard)
-    : null;
+  // Resolved once for the whole run. No images: style images alongside identity
+  // references wrecked character continuity even capped at two — the model kept
+  // sourcing content from them. In STYLE_REF mode the look travels as text, and
+  // the only images in a shot prompt are identity references. Reference stills
+  // still use the images (nothing competes there), and they carry the look into
+  // every character before shots are rendered.
+  const style = await loadStyleContext(db, storyboard, { withImages: false });
 
   // Build entity name lookup for labelled conditioning
   const entityNames: Record<string, string> = {};
@@ -455,8 +410,8 @@ export async function POST(
               shotKeyFrames[shotKey] = { status: 'generating', url: null };
 
               try {
-                const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock, shot.grammar);
-                const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar, styleSummary);
+                const prompt = buildShotPrompt(shot.key_frame_prompt, style, shot.grammar);
+                const declaration = styleDeclaration(style, shot.grammar.scale);
 
                 // Primary: entities explicitly in this shot's continuity.
                 const continuityIds = new Set<string>([
@@ -491,8 +446,8 @@ export async function POST(
                 // prevFrame spatial continuity is only safe in watercolour mode —
                 // in photoreal mode Gemini composites the image content rather than
                 // reading it as a spatial reference.
-                const prevFrameForShot = renderStyle === 'WATERCOLOUR_SKETCH' ? prevShotUrl : null;
-                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevFrameForShot, styleRefImages);
+                const prevFrameForShot = style.renderStyle === 'WATERCOLOUR_SKETCH' ? prevShotUrl : null;
+                const img = await generateOneShot(ai, model, prompt, declaration, conditioningEntities, prevFrameForShot);
 
                 if (!img) {
                   const durationMs = Date.now() - shotStart;

@@ -4,36 +4,15 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
-import { loadStyleImages, loadStyleSummary } from '@/src/lib/styles';
+import { loadStyleContext, refStyleLine, STYLE_REFERENCE_LABEL, type StyleContext } from '@/src/lib/style-context';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
-import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-// Copied from generate-refs/route.ts — do not import from it.
-const WATERCOLOUR_STYLE =
-  'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art.';
-
-
-function buildPrompt(
-  basePrompt: string,
-  renderStyle: string,
-  _styleLock: ParsedStoryboard['style_lock'],
-  styleSummary?: string | null,
-): string {
-  if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `Style: ${WATERCOLOUR_STYLE}\n\n${basePrompt}`;
-  }
-  if (renderStyle === 'STYLE_REF') {
-    // The conditioning images carry the look; the summary states it in words
-    // so a fine-tune doesn't drift off-style.
-    return styleSummary
-      ? `Style: ${styleSummary}\n\n${basePrompt}`
-      : basePrompt;
-  }
-  return `Style: ${PHOTOREAL_STYLE}\n\n${basePrompt}`;
+function buildPrompt(basePrompt: string, style: StyleContext): string {
+  return `${refStyleLine(style)}\n\n${basePrompt}`;
 }
 
 async function generateOneImage(
@@ -45,7 +24,7 @@ async function generateOneImage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
   if (styleRefImages.length > 0) {
-    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. This image defines the output medium — do NOT copy any characters, objects, locations, or composition from it.]' });
+    parts.push({ text: STYLE_REFERENCE_LABEL });
     for (const img of styleRefImages) {
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
     }
@@ -127,7 +106,6 @@ export async function POST(
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
   const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
-  const renderStyle = storyboard.render_style;
 
   // Find entity by id across characters, locations, and props
   let basePrompt: string | null = null;
@@ -157,16 +135,12 @@ export async function POST(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // STYLE_REF mode: fetch the style's images so fine-tuned alts match the
-  // saved style instead of falling back to the house photoreal look.
-  const styleRefImages = renderStyle === 'STYLE_REF'
-    ? await loadStyleImages(db, storyboard)
-    : [];
-  const styleSummary = renderStyle === 'STYLE_REF'
-    ? await loadStyleSummary(db, storyboard)
-    : null;
+  // The same context generate-refs builds, so a regenerated candidate matches
+  // the ones it sits beside in the approval grid. Reference stills carry the
+  // style's images: nothing competes with them here.
+  const style = await loadStyleContext(db, storyboard, { withImages: true });
 
-  const finalPrompt = buildPrompt(enrichedBase, renderStyle, parsed.style_lock, styleSummary);
+  const finalPrompt = buildPrompt(enrichedBase, style);
 
   // Charge for both candidates up front; whichever fails is refunded below.
   const CANDIDATES = 2;
@@ -188,7 +162,7 @@ export async function POST(
   const timestamp = Date.now();
   const results = await Promise.allSettled(
     [0, 1].map(async (j) => {
-      const img = await generateOneImage(ai, model, finalPrompt, styleRefImages);
+      const img = await generateOneImage(ai, model, finalPrompt, style.images);
       const buffer = Buffer.from(img.data, 'base64');
       const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
       const blob = await put(

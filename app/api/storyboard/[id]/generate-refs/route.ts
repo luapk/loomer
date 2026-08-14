@@ -3,20 +3,15 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
-import { loadStyleImages, loadStyleSummary } from '@/src/lib/styles';
+import { loadStyleContext, refStyleLine, STYLE_REFERENCE_LABEL, type StyleContext } from '@/src/lib/style-context';
 import { partitionByVoiceOnly } from '@/src/lib/character-identity';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
 import type { RefEntity } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
-import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
-
-const WATERCOLOUR_STYLE =
-  'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
-
 
 // Preamble prepended to every reference still prompt.
 // Establishes the output contract before the entity description so the model
@@ -28,25 +23,9 @@ const REF_PREAMBLE =
   'split panels, before/after panels, collages, multiple time periods, or multiple scenes. ' +
   'The image must contain ONLY the entity described below and nothing else that tells a story.';
 
-function buildPrompt(
-  entity: RefEntity,
-  renderStyle: string,
-  styleLock: ParsedStoryboard['style_lock'],
-  styleRefDescription?: string,
-): string {
-  const base = entity.reference_still_prompt;
-  if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${REF_PREAMBLE}\n\nStyle: ${WATERCOLOUR_STYLE}\n\n${base}`;
-  }
-  if (renderStyle === 'STYLE_REF') {
-    const styleNote = styleRefDescription
-      ? `${styleRefDescription} Match this style exactly, as shown in the provided style reference image(s).`
-      : 'Match the visual style of the provided style reference image(s).';
-    return `${REF_PREAMBLE}\n\nStyle: ${styleNote}\n\n${base}`;
-  }
-  return `${REF_PREAMBLE}\n\nStyle: ${PHOTOREAL_STYLE}\n\n${base}`;
+function buildPrompt(entity: RefEntity, style: StyleContext): string {
+  return `${REF_PREAMBLE}\n\n${refStyleLine(style)}\n\n${entity.reference_still_prompt}`;
 }
-
 
 // Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
 // Returns base64 bytes + mime type, or null if the response contains no image part.
@@ -65,7 +44,7 @@ async function generateOneImage(
     ? [{
         role: 'user',
         parts: [
-          { text: '[STYLE REFERENCE: The image(s) below define one visual style — match its colour palette, lighting, rendering technique, and texture exactly. Do NOT copy any subject, character, or composition from them.]' },
+          { text: STYLE_REFERENCE_LABEL },
           ...styleRefImages.map((img) => ({ inlineData: { data: img.data, mimeType: img.mimeType } })),
           { text: prompt },
         ],
@@ -164,18 +143,11 @@ export async function POST(
 
   const parsed = storyboard.parsed_json as unknown as ParsedStoryboard;
   const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
-  const renderStyle = storyboard.render_style;
 
-  // For STYLE_REF mode, fetch the style's images once to be injected as
-  // conditioning alongside every entity prompt.
-  const styleRefImages = renderStyle === 'STYLE_REF'
-    ? await loadStyleImages(getDb(), storyboard)
-    : [];
-  // Reference stills carry no identity references to compete with, so the full
-  // image set is safe here — and the written summary sharpens it further.
-  const styleSummary = renderStyle === 'STYLE_REF'
-    ? await loadStyleSummary(getDb(), storyboard)
-    : null;
+  // Reference stills are the one place style images are still attached: there
+  // are no identity references to compete with, and these stills are what carry
+  // the look forward into every shot that conditions on them.
+  const style = await loadStyleContext(getDb(), storyboard, { withImages: true });
 
   // A narrator or "(V.O.)" credit is a voice, not a body. Giving one a
   // reference still puts an invented person into frames that should carry
@@ -275,13 +247,13 @@ export async function POST(
           });
 
           try {
-            const prompt = buildPrompt(entity, renderStyle, parsed.style_lock, styleSummary ?? undefined);
+            const prompt = buildPrompt(entity, style);
 
             // 2 candidates in parallel per entity: small enough fan-out (2 concurrent
             // calls max) that rate limiting is not a concern.
             const candidateResults = await Promise.allSettled(
               [0, 1].map(async (j): Promise<string> => {
-                const img = await generateOneImage(ai, model, prompt, styleRefImages);
+                const img = await generateOneImage(ai, model, prompt, style.images);
                 const url = await uploadCandidate(id, entity.id, j, img, runId);
                 send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
                 return url;
