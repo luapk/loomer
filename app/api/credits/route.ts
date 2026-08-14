@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireSession } from '@/src/lib/auth';
 import { getDb } from '@/src/lib/db';
-import { getBalance, isExempt } from '@/src/lib/credits';
+import { ensureStarterCredits, getBalance, isExempt } from '@/src/lib/credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +11,8 @@ export async function GET() {
   if (auth instanceof NextResponse) return auth;
 
   const db = getDb();
+  if (!isExempt(auth)) await ensureStarterCredits(db, auth.uid);
+
   const [balance, entries] = await Promise.all([
     getBalance(db, auth.uid),
     db.creditLedger.findMany({

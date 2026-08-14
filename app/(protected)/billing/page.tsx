@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { getSession } from '@/src/lib/auth';
 import { getDb } from '@/src/lib/db';
-import { getBalance, IMAGE_CREDIT_COST, PARSE_CREDIT_COST } from '@/src/lib/credits';
+import { ensureStarterCredits, getBalance, IMAGE_CREDIT_COST, PARSE_CREDIT_COST } from '@/src/lib/credits';
 import { Badge } from '@/src/components/ui/badge';
 import { AdminGrantPanel } from './AdminGrantPanel';
 
@@ -38,6 +38,8 @@ export default async function BillingPage() {
 
   const db = getDb();
   const isAdmin = session.role === 'ADMIN';
+  if (!isAdmin) await ensureStarterCredits(db, session.uid);
+
   const [balance, entries] = await Promise.all([
     getBalance(db, session.uid),
     db.creditLedger.findMany({

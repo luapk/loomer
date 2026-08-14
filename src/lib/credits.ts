@@ -86,6 +86,31 @@ export async function grant(
   await db.creditLedger.create({ data });
 }
 
+/**
+ * Give an account its starter credits if it has never had any.
+ *
+ * Idempotent via the unique `payment_ref`, so it's safe to call on any path.
+ * This is what stops accounts that predate the credit system — which have no
+ * ledger rows at all — from being locked out at a zero balance.
+ */
+export async function ensureStarterCredits(db: PrismaClient, userId: string): Promise<void> {
+  await db.creditLedger.createMany({
+    data: [{
+      user_id: userId,
+      delta: SIGNUP_BONUS_CREDITS,
+      reason: 'signup_bonus',
+      payment_ref: starterCreditRef(userId),
+      note: 'Welcome credits',
+    }],
+    skipDuplicates: true,
+  });
+}
+
+/** Ledger key for an account's one-and-only starter grant. */
+export function starterCreditRef(userId: string): string {
+  return `signup:${userId}`;
+}
+
 export class InsufficientCreditsError extends Error {
   constructor(public required: number, public balance: number) {
     super(`Needs ${required} credits, balance is ${balance}`);
@@ -106,6 +131,10 @@ export async function debit(
   opts: { storyboardId?: string; note?: string } = {},
 ): Promise<number> {
   if (isExempt(session) || amount <= 0) return 0;
+
+  // Accounts created before credits existed get their starter grant here, so
+  // the first thing they generate isn't a paywall.
+  await ensureStarterCredits(db, session.uid);
 
   const balance = await getBalance(db, session.uid);
   if (balance < amount) {
