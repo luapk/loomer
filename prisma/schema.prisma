@@ -88,6 +88,7 @@ model Storyboard {
   shot_frames      ShotFrame[]
   ref_stills       ReferenceStill[]
   voice_overs      ShotVoiceOver[]
+  end_card         EndCard?
 
   @@index([user_id])
   @@map("storyboards")
@@ -109,6 +110,35 @@ model ShotFrame {
 
   @@unique([storyboard_id, shot_number])
   @@map("shot_frames")
+}
+
+// The board's closing frame: an uploaded end card, or a logo composited over
+// the final rendered frame, either optionally carrying an endline.
+//
+// The layers are stored so the card stays editable, AND the flattened render
+// is stored alongside them. Compositing happens in the browser; everything
+// downstream (PDF, ZIP, animatic, share) just consumes composited_url like any
+// other frame, so no server-side image library is needed anywhere.
+model EndCard {
+  id            String     @id @default(uuid())
+  storyboard_id String     @unique
+  // upload  — image_url IS the card.
+  // overlay — image_url is a transparent logo drawn over the last frame.
+  mode          String     @default("overlay")
+  image_url     String?
+  endline       String?
+  // Logo placement, as fractions of frame size so it survives a resolution change.
+  logo_scale    Float      @default(0.3)
+  logo_x        Float      @default(0.5)
+  logo_y        Float      @default(0.5)
+  // overlay mode only: "last_frame", or a hex colour for a solid card.
+  background    String     @default("last_frame")
+  // The flattened result the rest of the app reads.
+  composited_url String?
+  updated_at    DateTime   @updatedAt
+  storyboard    Storyboard @relation(fields: [storyboard_id], references: [id], onDelete: Cascade)
+
+  @@map("end_cards")
 }
 
 // One row per shot that has a voice-over line. Separate from ShotFrame so

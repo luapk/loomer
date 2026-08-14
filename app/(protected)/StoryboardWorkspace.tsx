@@ -16,6 +16,7 @@ import { CameraArrows } from './CameraArrows';
 import { ExportMenu } from './ExportMenu';
 import { InsertFrameDialog } from './InsertFrameDialog';
 import { VoiceOverPanel, type VoiceOver } from './VoiceOverPanel';
+import { EndCardPanel, type EndCard } from './EndCardPanel';
 import { voiceOverLines } from '@/src/lib/voice-over';
 import { WaitCard } from './WaitCard';
 
@@ -45,6 +46,17 @@ import type { ContinuityIssue, ContinuityCheckResult } from '@/app/api/storyboar
 import { RegenShotButton } from './RegenShotButton';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH' | 'STYLE_REF';
+
+/**
+ * Synthetic trailing shot used to play the end card in the animatic. The high
+ * number keeps it last and out of the way of real shot numbers.
+ */
+const END_CARD_SHOT = {
+  shot_number: 999999,
+  descriptor: 'End card',
+  grammar: { scale: 'WS' },
+  continuity: { location_id: 'END-CARD' },
+} as const;
 
 /** A director's saved style — see /styles. */
 type SavedStyle = { id: string; name: string; imageUrls: string[]; summary: string | null };
@@ -185,6 +197,8 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   // Voice-over audio, keyed by shot in the panel; loaded with the board.
   const [voiceOvers, setVoiceOvers] = useState<VoiceOver[]>([]);
   const [savedVoice, setSavedVoice] = useState<string | null>(null);
+  // The board's closing frame — flattened in the browser, stored as one image.
+  const [endCard, setEndCard] = useState<EndCard | null>(null);
 
   // Saved director styles (see /styles) — the STYLE_REF options in the picker.
   const [savedStyles, setSavedStyles] = useState<SavedStyle[]>([]);
@@ -264,6 +278,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
         style_id: string | null;
         voice_overs?: VoiceOver[];
         vo_voice?: string | null;
+        end_card?: EndCard | null;
         image_model: string | null;
         style_ref_url: string | null;
         audio_url: string | null;
@@ -276,6 +291,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
         if (data.style_id) setStyleId(data.style_id);
         if (data.voice_overs) setVoiceOvers(data.voice_overs);
         if (data.vo_voice) setSavedVoice(data.vo_voice);
+        setEndCard(data.end_card ?? null);
         if (data.audio_url) {
           setAudioUrl(data.audio_url);
           setAudioTrimStart(data.audio_trim_start ?? 0);
@@ -1121,7 +1137,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   ];
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-12 space-y-6">
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -1235,7 +1251,12 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
       )}
 
       {/* ── Tab bar — always visible ── */}
-      <div className="flex" style={{ borderBottom: '1px solid var(--ink)' }}>
+      {/* Scrolls on narrow screens: five monospace tabs are wider than a phone,
+          and letting them widen the page pushes the whole layout off-screen. */}
+      <div
+        className="flex overflow-x-auto"
+        style={{ borderBottom: '1px solid var(--ink)', scrollbarWidth: 'none' }}
+      >
         {tabDefs.map((tab) => (
           <button
             key={tab.id}
@@ -1249,6 +1270,8 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
               padding: '10px 16px',
               position: 'relative',
               userSelect: 'none',
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
               display: 'flex',
               alignItems: 'center',
               gap: 6,
@@ -1365,19 +1388,19 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             </div>
           </div>
 
-          {/* Voice-over — only meaningful once the board has shots */}
+          {/* End card — the board's closing frame */}
           {'id' in state && activeTab === 'boards' && (
             <div className="pt-4 border-t border-stone-200/70">
-              <VoiceOverPanel
+              <EndCardPanel
                 storyboardId={state.id}
-                lineCount={voiceOverLines(
+                lastFrameUrl={(() => {
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- parsedJson is untyped board JSON
-                  ((state.parsedJson as any)?.shots ?? []) as { shot_number: number; dialogue_vo?: string | null }[],
-                ).length}
-                voiceOvers={voiceOvers}
-                savedVoice={savedVoice}
-                onChange={setVoiceOvers}
-                onCreditError={(message) => setNotice({ message, action: 'billing' })}
+                  const shots = ((state.parsedJson as any)?.shots ?? []) as { shot_number: number }[];
+                  const last = shots[shots.length - 1];
+                  return last ? (shotKeyFrames[String(last.shot_number)]?.url ?? null) : null;
+                })()}
+                endCard={endCard}
+                onChange={setEndCard}
               />
             </div>
           )}
@@ -2127,6 +2150,26 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             );
           })}
 
+          {/* End card — the board's closing frame, if one has been built */}
+          {endCard?.composited_url && (
+            <div className="glass rounded-xl overflow-hidden">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={endCard.composited_url}
+                alt="End card"
+                loading="lazy"
+                decoding="async"
+                className="w-full aspect-video object-cover"
+              />
+              <div className="px-4 py-2.5 flex items-center justify-between">
+                <p className="text-xs text-stone-500">End card</p>
+                {endCard.endline && (
+                  <p className="text-xs text-stone-400 italic truncate ml-3">{endCard.endline}</p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Trailing add-frame target (also the end drop zone while dragging) */}
           {'id' in state && shotsTotal > 0 && !shotsGenerating && 'parsedJson' in state && (
             <div
@@ -2182,10 +2225,40 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
 
 
       {/* Animatic tab */}
+      {/* Voice-over lives with the animatic — it's playback, not board setup. */}
+      {activeTab === 'animatic' && 'id' in state && 'parsedJson' in state && (
+        <div className="glass rounded-2xl p-6">
+          <VoiceOverPanel
+            storyboardId={state.id}
+            lineCount={voiceOverLines(
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- parsedJson is untyped board JSON
+              ((state.parsedJson as any)?.shots ?? []) as { shot_number: number; dialogue_vo?: string | null }[],
+            ).length}
+            voiceOvers={voiceOvers}
+            savedVoice={savedVoice}
+            onChange={setVoiceOvers}
+            onCreditError={(message) => setNotice({ message, action: 'billing' })}
+          />
+        </div>
+      )}
+
       {activeTab === 'animatic' && 'parsedJson' in state && (
         <Animatic
-          shots={state.parsedJson?.shots ?? []}
-          shotKeyFrames={shotKeyFrames}
+          shots={
+            endCard?.composited_url
+              ? [...(state.parsedJson?.shots ?? []), END_CARD_SHOT]
+              : (state.parsedJson?.shots ?? [])
+          }
+          shotKeyFrames={
+            endCard?.composited_url
+              ? {
+                  ...shotKeyFrames,
+                  [String(END_CARD_SHOT.shot_number)]: {
+                    status: 'done', url: endCard.composited_url,
+                  },
+                }
+              : shotKeyFrames
+          }
           storyboardTitle={'title' in state ? state.title : 'Untitled'}
           storyboardId={'id' in state ? state.id : undefined}
           initialAudioUrl={audioUrl}

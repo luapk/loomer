@@ -182,6 +182,16 @@ export async function GET(
     .filter(([, f]) => f.status === 'done' && f.url)
     .sort(([a], [b]) => Number(a) - Number(b));
 
+  // The end card is already flattened to one image by the browser, so it drops
+  // in as an ordinary final frame.
+  const endCard = await db.endCard.findUnique({
+    where: { storyboard_id: id },
+    select: { composited_url: true },
+  });
+  if (endCard?.composited_url) {
+    doneEntries.push(['end-card', { status: 'done', url: endCard.composited_url }]);
+  }
+
   if (doneEntries.length === 0) {
     return Response.json({ error: 'No completed shots to download' }, { status: 422 });
   }

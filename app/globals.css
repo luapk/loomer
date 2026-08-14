@@ -80,3 +80,13 @@
     border-top: 1px solid var(--ink);
   }
 }
+
+
+/* Nothing should widen the page past the viewport — a single overflowing child
+   (a wide tab row, a long unbroken string) otherwise scrolls the whole layout
+   sideways on a phone and crops the header and headline. */
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}

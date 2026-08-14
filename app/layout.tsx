@@ -12,7 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="min-h-screen">
         <div className="min-h-screen flex flex-col">
-          <header className="sticky top-0 z-10 glass border-b border-stone-200/60 px-6 py-4">
+          <header className="sticky top-0 z-10 glass border-b border-stone-200/60 px-4 sm:px-6 py-4">
             <div className="max-w-5xl mx-auto flex items-center justify-between">
               <a href="/" className="hover:opacity-70 transition-opacity flex items-center">
                 <Image
@@ -20,7 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   alt="Loomer"
                   width={911}
                   height={443}
-                  style={{ height: 64, width: 'auto' }}
+                  className="h-10 sm:h-16 w-auto"
                   priority
                 />
               </a>
