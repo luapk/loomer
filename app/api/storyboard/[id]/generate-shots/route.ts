@@ -3,8 +3,9 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
-import { loadStyleImages, loadStyleSummary, styleDirective, MAX_STYLE_IMAGES_PER_SHOT } from '@/src/lib/styles';
+import { loadStyleSummary, styleDirective } from '@/src/lib/styles';
 import { isVoiceOnlyCharacter } from '@/src/lib/character-identity';
+import { uniqueVisualLabels } from '@/src/lib/entity-labels';
 import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -298,9 +299,13 @@ export async function POST(
   // Capped hard: style images compete with identity references inside the same
   // prompt, and past ~2 the model starts taking content from them. The written
   // summary carries the rest of the style.
-  const styleRefImages = renderStyle === 'STYLE_REF'
-    ? await loadStyleImages(db, storyboard, MAX_STYLE_IMAGES_PER_SHOT)
-    : [];
+  // Deliberately empty. Style images alongside identity references wrecked
+  // character continuity even capped at two — the model kept sourcing content
+  // from them. In STYLE_REF mode the style now travels as text only (the
+  // written summary), and the only images in a shot prompt are identity
+  // references. Reference stills still use the images: nothing competes there,
+  // and they carry the look into every character before shots are rendered.
+  const styleRefImages: { data: string; mimeType: string }[] = [];
   const styleSummary = renderStyle === 'STYLE_REF'
     ? await loadStyleSummary(db, storyboard)
     : null;
@@ -314,18 +319,14 @@ export async function POST(
   // IP-safe visual labels — use reference_still_prompt excerpts so known brand /
   // franchise names (e.g. "Wolverine", "Sabretooth") never appear in the label
   // text sent to the image model.
-  const entityVisualLabels: Record<string, string> = {};
-  for (const c of parsed.characters) {
-    const excerpt = c.reference_still_prompt.split(/[.!?]/)[0]?.trim() ?? '';
-    entityVisualLabels[c.id] = excerpt.length > 10 ? excerpt : c.reference_still_prompt.slice(0, 100);
-  }
-  for (const l of parsed.locations) {
-    const excerpt = l.reference_still_prompt.split(/[.!?]/)[0]?.trim() ?? '';
-    entityVisualLabels[l.id] = excerpt.length > 10 ? excerpt : l.reference_still_prompt.slice(0, 100);
-  }
-  for (const p of parsed.props) {
-    entityVisualLabels[p.id] = p.name;
-  }
+  // Labels must be unique: they are the only thing telling the model which
+  // conditioning image is which entity, and two guises of one performer share
+  // their physical description verbatim by design. See src/lib/entity-labels.ts.
+  const entityVisualLabels = uniqueVisualLabels([
+    ...parsed.characters.map((c) => ({ id: c.id, prompt: c.reference_still_prompt })),
+    ...parsed.locations.map((l) => ({ id: l.id, prompt: l.reference_still_prompt })),
+    ...parsed.props.map((p) => ({ id: p.id, prompt: p.name })),
+  ]);
 
   const encoder = new TextEncoder();
   const ai = new GoogleGenAI({ apiKey });

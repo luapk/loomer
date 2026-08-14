@@ -1388,23 +1388,6 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             </div>
           </div>
 
-          {/* End card — the board's closing frame */}
-          {'id' in state && activeTab === 'boards' && (
-            <div className="pt-4 border-t border-stone-200/70">
-              <EndCardPanel
-                storyboardId={state.id}
-                lastFrameUrl={(() => {
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- parsedJson is untyped board JSON
-                  const shots = ((state.parsedJson as any)?.shots ?? []) as { shot_number: number }[];
-                  const last = shots[shots.length - 1];
-                  return last ? (shotKeyFrames[String(last.shot_number)]?.url ?? null) : null;
-                })()}
-                endCard={endCard}
-                onChange={setEndCard}
-              />
-            </div>
-          )}
-
           {/* Model picker */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-stone-600">Image model</p>
@@ -2203,6 +2186,24 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             </div>
           )}
 
+          {/* End-card controls sit at the foot of the board — it's the closing
+              frame, so it belongs after the frames, not up in generation setup. */}
+          {'id' in state && 'parsedJson' in state && !shotsGenerating && shotsTotal > 0 && (
+            <div className="glass rounded-2xl p-6 mt-2">
+              <EndCardPanel
+                storyboardId={state.id}
+                lastFrameUrl={(() => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- parsedJson is untyped board JSON
+                  const shots = ((state.parsedJson as any)?.shots ?? []) as { shot_number: number }[];
+                  const last = shots[shots.length - 1];
+                  return last ? (shotKeyFrames[String(last.shot_number)]?.url ?? null) : null;
+                })()}
+                endCard={endCard}
+                onChange={setEndCard}
+              />
+            </div>
+          )}
+
           {/* Insert-frame composer */}
           {insertAt !== null && 'id' in state && 'parsedJson' in state && (
             <InsertFrameDialog
@@ -2225,23 +2226,6 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
 
 
       {/* Animatic tab */}
-      {/* Voice-over lives with the animatic — it's playback, not board setup. */}
-      {activeTab === 'animatic' && 'id' in state && 'parsedJson' in state && (
-        <div className="glass rounded-2xl p-6">
-          <VoiceOverPanel
-            storyboardId={state.id}
-            lineCount={voiceOverLines(
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- parsedJson is untyped board JSON
-              ((state.parsedJson as any)?.shots ?? []) as { shot_number: number; dialogue_vo?: string | null }[],
-            ).length}
-            voiceOvers={voiceOvers}
-            savedVoice={savedVoice}
-            onChange={setVoiceOvers}
-            onCreditError={(message) => setNotice({ message, action: 'billing' })}
-          />
-        </div>
-      )}
-
       {activeTab === 'animatic' && 'parsedJson' in state && (
         <Animatic
           shots={
@@ -2266,6 +2250,24 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
           voiceOvers={voiceOvers}
         />
       )}
+
+      {/* Voice-over sits under the animatic's own controls. */}
+      {activeTab === 'animatic' && 'id' in state && 'parsedJson' in state && (
+        <div className="glass rounded-2xl p-6">
+          <VoiceOverPanel
+            storyboardId={state.id}
+            lineCount={voiceOverLines(
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- parsedJson is untyped board JSON
+              ((state.parsedJson as any)?.shots ?? []) as { shot_number: number; dialogue_vo?: string | null }[],
+            ).length}
+            voiceOvers={voiceOvers}
+            savedVoice={savedVoice}
+            onChange={setVoiceOvers}
+            onCreditError={(message) => setNotice({ message, action: 'billing' })}
+          />
+        </div>
+      )}
+
 
       {/* How It Works modal */}
       {showHowItWorks && (

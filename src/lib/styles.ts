@@ -8,17 +8,6 @@ import type { PrismaClient } from '@prisma/client';
 /** Images a single style can hold. */
 export const MAX_STYLE_IMAGES = 6;
 
-/**
- * Style images attached to a *shot* render.
- *
- * Hard cap, and deliberately small. Shot renders also carry identity
- * references for every character, location and prop in frame; when style
- * images outnumber those, the model starts taking content from the style
- * images and character likeness collapses. The style is carried by the text
- * summary instead — see `styleDirective`.
- */
-export const MAX_STYLE_IMAGES_PER_SHOT = 2;
-
 /** Styles a user can save. Deliberately small — this is a shortlist, not a library. */
 export const MAX_STYLES_PER_USER = 5;
 
@@ -93,7 +82,14 @@ export async function loadStyleImages(
   return loaded.filter((img): img is { data: string; mimeType: string } => img !== null);
 }
 
-/** The saved style's written summary, if there is one. */
+/**
+ * The saved style's written summary.
+ *
+ * Back-fills on first use: styles saved before summaries existed have none,
+ * and since the summary is now the *only* carrier of style in a shot prompt,
+ * leaving it null would quietly degrade every render of that style forever.
+ * Written once, then read from the row.
+ */
 export async function loadStyleSummary(
   db: PrismaClient,
   storyboard: { style_id: string | null },
@@ -101,22 +97,36 @@ export async function loadStyleSummary(
   if (!storyboard.style_id) return null;
   const style = await db.style.findUnique({
     where: { id: storyboard.style_id },
-    select: { summary: true },
+    select: { name: true, summary: true, image_urls: true },
   });
-  return style?.summary ?? null;
+  if (!style) return null;
+  if (style.summary) return style.summary;
+  if (style.image_urls.length === 0) return null;
+
+  // Imported lazily: this module is pulled into client bundles via the style
+  // picker types, and the summariser reaches for the Anthropic SDK.
+  const { summariseStyle } = await import('@/src/lib/style-summary');
+  const summary = await summariseStyle(style.name, style.image_urls);
+  if (summary) {
+    await db.style.update({ where: { id: storyboard.style_id }, data: { summary } });
+  }
+  return summary;
 }
 
 /**
  * The mandatory style directive for a shot prompt.
  *
- * Written text does the heavy lifting so shot renders can carry only one or
- * two style images — leaving the identity references to dominate. Without the
- * summary this falls back to pointing at the images alone, which is what the
- * pre-summary behaviour did.
+ * Text only. Shot prompts carry no style images at all: alongside identity
+ * references the model kept sourcing content from them and character likeness
+ * collapsed. The look reaches the frame through this sentence and through the
+ * reference stills, which were themselves generated in the style.
  */
 export function styleDirective(summary: string | null): string {
   if (summary) {
-    return `OUTPUT STYLE (mandatory): ${summary} The STYLE REFERENCE image(s) show this look — match their colour palette, lighting, rendering technique and texture. Every element in the output MUST be rendered in this style.`;
+    return `OUTPUT STYLE (mandatory): ${summary} Render every element of this frame in that style — including any character, location or object taken from a reference image. The references define WHO and WHAT appears; this directive defines HOW it is drawn.`;
   }
-  return 'OUTPUT STYLE (mandatory): Match the visual style of the STYLE REFERENCE image(s) provided — reproduce their colour palette, lighting quality, rendering technique, texture and overall aesthetic. Every element in the output MUST match this style.';
+  // No summary yet (the style was saved before summaries, or Claude was
+  // unreachable). The identity references still carry the look, since they were
+  // themselves generated in this style.
+  return 'OUTPUT STYLE (mandatory): Match the visual style established by the reference images provided — their rendering medium, colour palette, lighting quality and texture. Render every element of this frame in that same style.';
 }
