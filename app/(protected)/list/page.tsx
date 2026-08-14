@@ -8,7 +8,6 @@ import { Button } from '@/src/components/ui/button';
 import Link from 'next/link';
 import { FilmIcon, Plus, ExternalLink } from 'lucide-react';
 import { StoryboardRowActions, StoryboardRenameButton } from './StoryboardRowActions';
-import { SignOutButton } from './SignOutButton';
 
 function toTitleCase(str: string): string {
   const minors = new Set(['a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'by', 'in', 'of', 'up']);
@@ -77,7 +76,6 @@ export default async function ListPage() {
           <p className="mt-1 text-stone-500 text-sm">{storyboards.length} total</p>
         </div>
         <div className="flex items-center gap-4">
-          <SignOutButton email={session.email} />
           <Button asChild>
             <Link href="/">
               <Plus className="h-4 w-4" />
