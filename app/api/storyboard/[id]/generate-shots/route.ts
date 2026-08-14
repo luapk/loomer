@@ -3,7 +3,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
-import { loadStyleImages } from '@/src/lib/styles';
+import { loadStyleImages, loadStyleSummary, styleDirective, MAX_STYLE_IMAGES_PER_SHOT } from '@/src/lib/styles';
 import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -93,12 +93,13 @@ function buildStyleDeclaration(
   renderStyle: string,
   _styleLock: ParsedStoryboard['style_lock'],
   grammar?: ParsedStoryboard['shots'][number]['grammar'],
+  styleSummary: string | null = null,
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
   }
   if (renderStyle === 'STYLE_REF') {
-    return 'OUTPUT STYLE (mandatory): Match the visual style of the STYLE REFERENCE image provided — reproduce its colour palette, lighting quality, rendering technique, texture, and overall aesthetic. Every element in the output MUST match this style.';
+    return styleDirective(styleSummary);
   }
   const dofLine = grammar ? ` ${buildDofLine(grammar.scale)}` : '';
   return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dofLine} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
@@ -184,7 +185,7 @@ async function generateOneShot(
   // Style reference image (STYLE_REF mode) — injected immediately after the
   // style declaration so the medium is locked before identity refs are shown.
   if (styleRefImages.length > 0) {
-    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. These images together define the output medium — do NOT copy any characters, objects, locations, or composition from them.]' });
+    parts.push({ text: '[STYLE REFERENCE — LOOK ONLY, LOWEST CONTENT PRIORITY. Reproduce the colour palette, lighting quality, rendering technique, texture, line quality and overall aesthetic of the image(s) below. They define HOW the frame is rendered and NOTHING about what it contains. Do NOT take any character, face, body, costume, object, location or composition from them. Where a style image and an identity reference disagree about how something LOOKS AS A THING, the identity reference always wins; the style images only govern the medium.]' });
     for (const img of styleRefImages) {
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
     }
@@ -293,9 +294,15 @@ export async function POST(
     refStills[entityId]?.selected ?? null;
 
   // Fetch the style's images once for STYLE_REF mode.
+  // Capped hard: style images compete with identity references inside the same
+  // prompt, and past ~2 the model starts taking content from them. The written
+  // summary carries the rest of the style.
   const styleRefImages = renderStyle === 'STYLE_REF'
-    ? await loadStyleImages(db, storyboard)
+    ? await loadStyleImages(db, storyboard, MAX_STYLE_IMAGES_PER_SHOT)
     : [];
+  const styleSummary = renderStyle === 'STYLE_REF'
+    ? await loadStyleSummary(db, storyboard)
+    : null;
 
   // Build entity name lookup for labelled conditioning
   const entityNames: Record<string, string> = {};
@@ -447,7 +454,7 @@ export async function POST(
 
               try {
                 const prompt = buildShotPrompt(shot.key_frame_prompt, renderStyle, parsed.style_lock, shot.grammar);
-                const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar);
+                const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar, styleSummary);
 
                 // Primary: entities explicitly in this shot's continuity.
                 const continuityIds = new Set<string>([

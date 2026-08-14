@@ -3,7 +3,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
-import { loadStyleImages } from '@/src/lib/styles';
+import { loadStyleImages, loadStyleSummary, styleDirective, MAX_STYLE_IMAGES_PER_SHOT } from '@/src/lib/styles';
 import { getReferenceStills, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imageCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -66,6 +66,11 @@ function buildShotPrompt(
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
   }
+  if (renderStyle === 'STYLE_REF') {
+    // Style comes from the directive + reference images. Emitting the photoreal
+    // block here would contradict them outright.
+    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${keyFramePrompt}`;
+  }
   const dofLine = grammar ? `${buildDofLine(grammar.scale)} ` : '';
   return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_STYLE} ${dofLine}\n\n${keyFramePrompt}`;
 }
@@ -74,9 +79,13 @@ function buildStyleDeclaration(
   renderStyle: string,
   _styleLock: ParsedStoryboard['style_lock'],
   grammar?: ParsedStoryboard['shots'][number]['grammar'],
+  styleSummary: string | null = null,
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  }
+  if (renderStyle === 'STYLE_REF') {
+    return styleDirective(styleSummary);
   }
   const dofLine = grammar ? ` ${buildDofLine(grammar.scale)}` : '';
   return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dofLine} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
@@ -133,7 +142,7 @@ async function generateOneShot(
 
   // Style reference image (STYLE_REF mode) — injected after the style declaration.
   if (styleRefImages.length > 0) {
-    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. These images together define the output medium — do NOT copy any characters, objects, locations, or composition from them.]' });
+    parts.push({ text: '[STYLE REFERENCE — LOOK ONLY, LOWEST CONTENT PRIORITY. Reproduce the colour palette, lighting quality, rendering technique, texture, line quality and overall aesthetic of the image(s) below. They define HOW the frame is rendered and NOTHING about what it contains. Do NOT take any character, face, body, costume, object, location or composition from them. Where a style image and an identity reference disagree about how something LOOKS AS A THING, the identity reference always wins; the style images only govern the medium.]' });
     for (const img of styleRefImages) {
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
     }
@@ -332,13 +341,20 @@ export async function POST(
 
   const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
-  const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar);
   const ai = new GoogleGenAI({ apiKey });
 
   // Fetch the style's images once for STYLE_REF mode.
+  // Capped hard: style images compete with identity references inside the same
+  // prompt, and past ~2 the model starts taking content from them. The written
+  // summary carries the rest of the style.
   const styleRefImages = renderStyle === 'STYLE_REF'
-    ? await loadStyleImages(db, storyboard)
+    ? await loadStyleImages(db, storyboard, MAX_STYLE_IMAGES_PER_SHOT)
     : [];
+  const styleSummary = renderStyle === 'STYLE_REF'
+    ? await loadStyleSummary(db, storyboard)
+    : null;
+
+  const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar, styleSummary);
 
   // Charge for the one image, refunded below if the model doesn't deliver.
   let chargedCredits = 0;

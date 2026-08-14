@@ -3,6 +3,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession } from '@/src/lib/auth';
 import { listStyles, MAX_STYLE_IMAGES, MAX_STYLES_PER_USER } from '@/src/lib/styles';
+import { summariseStyle } from '@/src/lib/style-summary';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -88,7 +89,11 @@ export async function POST(request: NextRequest) {
     select: { id: true, name: true, image_urls: true },
   });
 
+  // Read the look back to the director so they can see how it was interpreted.
+  const summary = await summariseStyle(saved.name, saved.image_urls);
+  if (summary) await db.style.update({ where: { id: style.id }, data: { summary } });
+
   return NextResponse.json({
-    style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls },
+    style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls, summary },
   });
 }

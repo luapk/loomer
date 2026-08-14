@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Plus, Trash2, Upload, X } from 'lucide-react';
 
-type Style = { id: string; name: string; imageUrls: string[] };
+type Style = { id: string; name: string; imageUrls: string[]; summary: string | null };
 
 export function StylesManager({ maxStyles, maxImages }: { maxStyles: number; maxImages: number }) {
   const [styles, setStyles] = useState<Style[] | null>(null);
@@ -220,6 +220,23 @@ export function StylesManager({ maxStyles, maxImages }: { maxStyles: number; max
                 className="hidden"
                 onChange={(e) => { void addImages(style.id, e.target.files); }}
               />
+
+              {/* How the machine read the look — the director's check that it
+                  understood the reference set. */}
+              {busyStyle === style.id ? (
+                <p className="text-xs text-stone-400 flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Reading the style…
+                </p>
+              ) : style.summary ? (
+                <p className="text-xs text-stone-500 leading-relaxed border-l-2 border-stone-200 pl-3">
+                  {style.summary}
+                </p>
+              ) : style.imageUrls.length > 0 ? (
+                <p className="text-xs text-stone-400">
+                  Style description unavailable — add or replace an image to retry.
+                </p>
+              ) : null}
             </div>
           ))}
         </div>

@@ -3,6 +3,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession } from '@/src/lib/auth';
 import { MAX_STYLE_IMAGES } from '@/src/lib/styles';
+import { summariseStyle } from '@/src/lib/style-summary';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -47,9 +48,11 @@ export async function PATCH(
     const saved = await db.style.update({
       where: { id },
       data: { name },
-      select: { id: true, name: true, image_urls: true },
+      select: { id: true, name: true, image_urls: true, summary: true },
     });
-    return NextResponse.json({ style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls } });
+    return NextResponse.json({
+      style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls, summary: saved.summary },
+    });
   }
 
   // Multipart → append images.
@@ -80,11 +83,13 @@ export async function PATCH(
     }
   }
 
-  // Index blobs past the current count so an append never overwrites.
-  const offset = style.image_urls.length;
+  // Unique per upload rather than indexed by position: an index-based name
+  // collides with an existing blob once an image has been removed, and
+  // allowOverwrite would then replace a kept image.
+  const stamp = Date.now();
   const urls = await Promise.all(files.map(async (file, i) => {
     const ext = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
-    const blob = await put(`styles/${auth.uid}/${id}/${offset + i}.${ext}`, file, {
+    const blob = await put(`styles/${auth.uid}/${id}/${stamp}-${i}.${ext}`, file, {
       access: 'public',
       contentType: file.type,
       allowOverwrite: true,
@@ -92,12 +97,23 @@ export async function PATCH(
     return blob.url;
   }));
 
+  // `push` appends in the database rather than read-modify-write. Uploads take
+  // seconds, so two adds in quick succession both read the pre-upload list and
+  // the second write erased the first — which is why adding an image looked
+  // like it wiped the style.
   const saved = await db.style.update({
     where: { id },
-    data: { image_urls: [...style.image_urls, ...urls] },
+    data: { image_urls: { push: urls } },
     select: { id: true, name: true, image_urls: true },
   });
-  return NextResponse.json({ style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls } });
+
+  // The look may have shifted — re-read it. Best-effort.
+  const summary = await summariseStyle(saved.name, saved.image_urls);
+  if (summary) await db.style.update({ where: { id }, data: { summary } });
+
+  return NextResponse.json({
+    style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls, summary },
+  });
 }
 
 /** Delete the whole style, or one image from it via ?imageUrl=. */
@@ -125,7 +141,11 @@ export async function DELETE(
       data: { image_urls: remaining },
       select: { id: true, name: true, image_urls: true },
     });
-    return NextResponse.json({ style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls } });
+    const summary = await summariseStyle(saved.name, saved.image_urls);
+    await db.style.update({ where: { id }, data: { summary } });
+    return NextResponse.json({
+      style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls, summary },
+    });
   }
 
   // Boards referencing this style fall back to their house style — the

@@ -4,7 +4,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
-import { loadStyleImages } from '@/src/lib/styles';
+import { loadStyleImages, loadStyleSummary } from '@/src/lib/styles';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
@@ -21,13 +21,17 @@ function buildPrompt(
   basePrompt: string,
   renderStyle: string,
   _styleLock: ParsedStoryboard['style_lock'],
+  styleSummary?: string | null,
 ): string {
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
     return `Style: ${WATERCOLOUR_STYLE}\n\n${basePrompt}`;
   }
   if (renderStyle === 'STYLE_REF') {
-    // Style is carried by the conditioning image — see generateOneImage.
-    return basePrompt;
+    // The conditioning images carry the look; the summary states it in words
+    // so a fine-tune doesn't drift off-style.
+    return styleSummary
+      ? `Style: ${styleSummary}\n\n${basePrompt}`
+      : basePrompt;
   }
   return `Style: ${PHOTOREAL_STYLE}\n\n${basePrompt}`;
 }
@@ -150,7 +154,6 @@ export async function POST(
     ? `${basePrompt}\n\nDirector's notes: ${notes}`
     : basePrompt;
 
-  const finalPrompt = buildPrompt(enrichedBase, renderStyle, parsed.style_lock);
 
   const ai = new GoogleGenAI({ apiKey });
 
@@ -159,6 +162,11 @@ export async function POST(
   const styleRefImages = renderStyle === 'STYLE_REF'
     ? await loadStyleImages(db, storyboard)
     : [];
+  const styleSummary = renderStyle === 'STYLE_REF'
+    ? await loadStyleSummary(db, storyboard)
+    : null;
+
+  const finalPrompt = buildPrompt(enrichedBase, renderStyle, parsed.style_lock, styleSummary);
 
   // Charge for both candidates up front; whichever fails is refunded below.
   const CANDIDATES = 2;

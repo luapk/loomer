@@ -3,7 +3,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
-import { loadStyleImages } from '@/src/lib/styles';
+import { loadStyleImages, loadStyleSummary } from '@/src/lib/styles';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
 import type { RefEntity } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -39,8 +39,8 @@ function buildPrompt(
   }
   if (renderStyle === 'STYLE_REF') {
     const styleNote = styleRefDescription
-      ? `Match the visual style of the provided style reference image (${styleRefDescription}).`
-      : 'Match the visual style of the provided style reference image.';
+      ? `${styleRefDescription} Match this style exactly, as shown in the provided style reference image(s).`
+      : 'Match the visual style of the provided style reference image(s).';
     return `${REF_PREAMBLE}\n\nStyle: ${styleNote}\n\n${base}`;
   }
   return `${REF_PREAMBLE}\n\nStyle: ${PHOTOREAL_STYLE}\n\n${base}`;
@@ -170,6 +170,11 @@ export async function POST(
   const styleRefImages = renderStyle === 'STYLE_REF'
     ? await loadStyleImages(getDb(), storyboard)
     : [];
+  // Reference stills carry no identity references to compete with, so the full
+  // image set is safe here — and the written summary sharpens it further.
+  const styleSummary = renderStyle === 'STYLE_REF'
+    ? await loadStyleSummary(getDb(), storyboard)
+    : null;
 
   const entities: RefEntity[] = [
     ...parsed.characters.map((c) => ({
@@ -257,7 +262,7 @@ export async function POST(
           });
 
           try {
-            const prompt = buildPrompt(entity, renderStyle, parsed.style_lock);
+            const prompt = buildPrompt(entity, renderStyle, parsed.style_lock, styleSummary ?? undefined);
 
             // 2 candidates in parallel per entity: small enough fan-out (2 concurrent
             // calls max) that rate limiting is not a concern.

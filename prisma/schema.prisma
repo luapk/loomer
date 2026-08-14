@@ -133,6 +133,11 @@ model Style {
   user        User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
   name        String
   image_urls  String[]     @default([])
+  // One or two sentences describing the look, written by Claude from the
+  // images. Shown to the user as a check that the style read correctly, and
+  // injected into generation prompts so the style survives on far fewer
+  // conditioning images (which would otherwise crowd out identity refs).
+  summary     String?
   created_at  DateTime     @default(now())
   updated_at  DateTime     @updatedAt
   storyboards Storyboard[]

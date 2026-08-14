@@ -45,7 +45,7 @@ import { RegenShotButton } from './RegenShotButton';
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH' | 'STYLE_REF';
 
 /** A director's saved style — see /styles. */
-type SavedStyle = { id: string; name: string; imageUrls: string[] };
+type SavedStyle = { id: string; name: string; imageUrls: string[]; summary: string | null };
 type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'animatic';
 
 type State =
@@ -1153,7 +1153,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
               <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
                 {isLoaded && 'title' in state ? toTitleCase(state.title)
                   : (isGenerating || isParsing) && 'title' in state && state.title ? toTitleCase(state.title)
-                  : <em>Storyboards that feel like film.</em>}
+                  : <em>Finely tuned film theory, on the fly.</em>}
               </h1>
               {isLoaded && 'title' in state && (
                 <button
@@ -1332,8 +1332,12 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                       ))}
                     </div>
                     <p className={`text-xs font-medium truncate ${active ? 'text-white' : 'text-stone-900'}`}>{style.name}</p>
-                    <p className={`text-xs mt-0.5 ${active ? 'text-stone-300' : 'text-stone-400'}`}>
-                      {style.imageUrls.length} reference{style.imageUrls.length === 1 ? '' : 's'}
+                    <p
+                      className={`text-xs mt-0.5 line-clamp-2 ${active ? 'text-stone-300' : 'text-stone-400'}`}
+                      title={style.summary ?? undefined}
+                    >
+                      {style.summary
+                        ?? `${style.imageUrls.length} reference${style.imageUrls.length === 1 ? '' : 's'}`}
                     </p>
                   </button>
                 );
