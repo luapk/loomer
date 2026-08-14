@@ -43,6 +43,9 @@ import type { ContinuityIssue, ContinuityCheckResult } from '@/app/api/storyboar
 import { RegenShotButton } from './RegenShotButton';
 
 type RenderStyle = 'PHOTOREAL' | 'WATERCOLOUR_SKETCH' | 'STYLE_REF';
+
+/** A director's saved style — see /styles. */
+type SavedStyle = { id: string; name: string; imageUrls: string[] };
 type Tab = 'storyboard' | 'shots' | 'images' | 'boards' | 'animatic';
 
 type State =
@@ -176,13 +179,12 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   // 0 = current (latest), 1 = previous, 2 = two renders ago, …
   const [shotHistoryIndex, setShotHistoryIndex] = useState<Record<string, number>>({});
 
-  // Style reference upload
-  const [styleRefUrl, setStyleRefUrl] = useState<string | null>(null);
+  // Saved director styles (see /styles) — the STYLE_REF options in the picker.
+  const [savedStyles, setSavedStyles] = useState<SavedStyle[]>([]);
+  const [styleId, setStyleId] = useState<string | null>(null);
   // Mood-film music track (animatic) — restored from DB, managed by Animatic.
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioTrimStart, setAudioTrimStart] = useState(0);
-  const [styleRefUploading, setStyleRefUploading] = useState(false);
-  const styleRefInputRef = useRef<HTMLInputElement>(null);
 
   const [activeTab, setActiveTab] = useState<Tab>('storyboard');
 
@@ -211,6 +213,14 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
       .finally(() => setModelsLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded]);
+
+  // Saved styles for the picker carousel — fetched once per session.
+  useEffect(() => {
+    fetch('/api/styles')
+      .then((r) => (r.ok ? r.json() : { styles: [] }))
+      .then((data: { styles?: SavedStyle[] }) => setSavedStyles(data.styles ?? []))
+      .catch(() => { /* picker falls back to the house styles */ });
+  }, []);
 
   const searchParams = useSearchParams();
 
@@ -244,6 +254,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
         parsed_json: unknown;
         status: string;
         render_style: RenderStyle;
+        style_id: string | null;
         image_model: string | null;
         style_ref_url: string | null;
         audio_url: string | null;
@@ -253,7 +264,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
         continuity_report: unknown;
       }) => {
         if (data.render_style) setRenderStyle(data.render_style);
-        if (data.style_ref_url) setStyleRefUrl(data.style_ref_url);
+        if (data.style_id) setStyleId(data.style_id);
         if (data.audio_url) {
           setAudioUrl(data.audio_url);
           setAudioTrimStart(data.audio_trim_start ?? 0);
@@ -472,7 +483,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
     await fetch(`/api/storyboard/${id}/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ render_style: renderStyle, image_model: imageModel }),
+      body: JSON.stringify({ render_style: renderStyle, image_model: imageModel, style_id: styleId }),
     });
 
     setState((prev) =>
@@ -598,7 +609,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
     await fetch(`/api/storyboard/${id}/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ render_style: renderStyle, image_model: imageModel }),
+      body: JSON.stringify({ render_style: renderStyle, image_model: imageModel, style_id: styleId }),
     });
 
     // Auto-sync shot prompts from any reference that changed since the last
@@ -723,25 +734,6 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   // quiet=true keeps the sync log closed unless something actually changed —
   // used by the automatic pre-generation sync, where "already in sync" is the
   // common case and shouldn't produce UI noise.
-  async function handleStyleRefUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !('id' in state)) return;
-    setStyleRefUploading(true);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const res = await fetch(`/api/storyboard/${state.id}/style-ref`, { method: 'POST', body: form });
-      if (res.ok) {
-        const data = await res.json() as { url: string };
-        setStyleRefUrl(data.url);
-        setRenderStyle('STYLE_REF');
-      }
-    } finally {
-      setStyleRefUploading(false);
-      if (styleRefInputRef.current) styleRefInputRef.current.value = '';
-    }
-  }
-
   async function syncPrompts(id: string, quiet = false) {
     setSyncingPrompts(true);
     setSyncLog([]);
@@ -1275,29 +1267,27 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             </p>
           </div>
 
-          {/* Style picker */}
+          {/* Style picker — house looks plus the director's saved styles */}
           <div className="space-y-2">
-            <p className="text-xs font-medium text-stone-600">Visual style</p>
-            <div className="grid grid-cols-3 gap-3">
-              {(
-                [
-                  { value: 'PHOTOREAL' as const, icon: Camera, label: 'Photoreal', description: 'Matches your DP & film stock' },
-                  { value: 'WATERCOLOUR_SKETCH' as const, icon: Paintbrush, label: 'Watercolour sketch', description: 'Pencil lines, muted watercolour wash' },
-                  { value: 'STYLE_REF' as const, icon: Upload, label: 'Style reference', description: 'Match uploaded image style' },
-                ] as const
-              ).map(({ value, icon: Icon, label, description }) => {
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-stone-600">Visual style</p>
+              <a href="/styles" className="text-xs text-stone-400 hover:text-stone-700 transition-colors">
+                Manage styles
+              </a>
+            </div>
+            {/* Horizontal carousel: two house styles, then up to five saved ones. */}
+            <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1">
+              {([
+                { value: 'PHOTOREAL' as const, icon: Camera, label: 'Photoreal', description: 'Matches your DP & film stock' },
+                { value: 'WATERCOLOUR_SKETCH' as const, icon: Paintbrush, label: 'Watercolour sketch', description: 'Pencil lines, muted wash' },
+              ] as const).map(({ value, icon: Icon, label, description }) => {
                 const active = renderStyle === value;
                 return (
                   <button
                     key={value}
-                    onClick={() => {
-                      setRenderStyle(value);
-                      if (value === 'STYLE_REF' && !styleRefUrl) {
-                        styleRefInputRef.current?.click();
-                      }
-                    }}
+                    onClick={() => { setRenderStyle(value); setStyleId(null); }}
                     disabled={state.phase === 'generating_refs'}
-                    className={`rounded-xl border p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                    className={`w-44 flex-shrink-0 rounded-xl border p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
                       active ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 hover:border-stone-300 bg-white'
                     }`}
                   >
@@ -1307,65 +1297,50 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                   </button>
                 );
               })}
-            </div>
-            {/* Style reference upload area */}
-            <input
-              ref={styleRefInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => { void handleStyleRefUpload(e); }}
-            />
-            {renderStyle === 'STYLE_REF' && (
-              <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 space-y-2">
-                {styleRefUrl ? (
-                  <div className="flex items-start gap-3">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={styleRefUrl} alt="Style reference" loading="lazy" decoding="async" className="w-16 h-16 object-cover rounded-lg flex-shrink-0" />
-                    <div className="flex-1 min-w-0 space-y-1.5">
-                      <p className="text-xs text-stone-600 font-medium">Style reference uploaded</p>
-                      <p className="text-xs text-stone-400">This image will guide the visual style of all generated frames.</p>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => styleRefInputRef.current?.click()}
-                          disabled={styleRefUploading || state.phase === 'generating_refs'}
-                          className="text-xs text-stone-500 hover:text-stone-900 transition-colors disabled:opacity-50"
-                        >
-                          {styleRefUploading ? 'Uploading…' : 'Replace'}
-                        </button>
-                        <span className="text-stone-200">·</span>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (!('id' in state)) return;
-                            await fetch(`/api/storyboard/${state.id}/style-ref`, { method: 'DELETE' });
-                            setStyleRefUrl(null);
-                            setRenderStyle('PHOTOREAL');
-                          }}
-                          disabled={state.phase === 'generating_refs'}
-                          className="text-xs text-red-500 hover:text-red-700 transition-colors disabled:opacity-50"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
+
+              {savedStyles.map((style) => {
+                const active = renderStyle === 'STYLE_REF' && styleId === style.id;
+                return (
                   <button
-                    type="button"
-                    onClick={() => styleRefInputRef.current?.click()}
-                    disabled={styleRefUploading || state.phase === 'generating_refs'}
-                    className="w-full flex flex-col items-center gap-2 py-4 text-stone-400 hover:text-stone-600 transition-colors disabled:opacity-50"
+                    key={style.id}
+                    onClick={() => { setRenderStyle('STYLE_REF'); setStyleId(style.id); }}
+                    disabled={state.phase === 'generating_refs'}
+                    className={`w-44 flex-shrink-0 rounded-xl border p-4 text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                      active ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 hover:border-stone-300 bg-white'
+                    }`}
                   >
-                    {styleRefUploading
-                      ? <Loader2 className="h-5 w-5 animate-spin" />
-                      : <Upload className="h-5 w-5" />}
-                    <span className="text-xs">{styleRefUploading ? 'Uploading…' : 'Click to upload a style reference image'}</span>
+                    {/* Thumbnail strip — the style read at a glance. */}
+                    <div className="flex gap-1 mb-2">
+                      {style.imageUrls.slice(0, 4).map((url: string) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          key={url}
+                          src={url}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          className="h-8 w-8 rounded object-cover"
+                        />
+                      ))}
+                    </div>
+                    <p className={`text-xs font-medium truncate ${active ? 'text-white' : 'text-stone-900'}`}>{style.name}</p>
+                    <p className={`text-xs mt-0.5 ${active ? 'text-stone-300' : 'text-stone-400'}`}>
+                      {style.imageUrls.length} reference{style.imageUrls.length === 1 ? '' : 's'}
+                    </p>
                   </button>
-                )}
-              </div>
-            )}
+                );
+              })}
+
+              {savedStyles.length === 0 && (
+                <a
+                  href="/styles"
+                  className="w-44 flex-shrink-0 rounded-xl border border-dashed border-stone-300 p-4 flex flex-col items-center justify-center gap-2 text-stone-400 hover:border-stone-400 hover:text-stone-600 transition-colors"
+                >
+                  <Upload className="h-4 w-4" />
+                  <span className="text-xs text-center">Save a style</span>
+                </a>
+              )}
+            </div>
           </div>
 
           {/* Model picker */}

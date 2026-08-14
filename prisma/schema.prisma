@@ -18,6 +18,7 @@ model User {
   created_at    DateTime   @default(now())
   storyboards   Storyboard[]
   credit_ledger CreditLedger[]
+  styles        Style[]
 
   @@map("users")
 }
@@ -67,7 +68,12 @@ model Storyboard {
   reference_stills  Json?
   shot_key_frames   Json?
   continuity_report Json?
+  // LEGACY single-image style reference. Superseded by style_id; still read
+  // as a fallback for boards created before named styles existed.
   style_ref_url     String?
+  // Named style (up to 4 reference images) driving STYLE_REF mode.
+  style_id          String?
+  style             Style?           @relation(fields: [style_id], references: [id], onDelete: SetNull)
   // Denormalized from parsed_json.shots.length so list views never have to
   // pull the full parsed board. Null on rows parsed before this column existed.
   shot_count        Int?
@@ -117,6 +123,22 @@ model ReferenceStill {
 
   @@unique([storyboard_id, entity_id])
   @@map("reference_stills_rows")
+}
+
+// A director's named look — up to 4 reference images conditioned into every
+// generation. Capped at 5 per user (enforced in the API, not the schema).
+model Style {
+  id          String       @id @default(uuid())
+  user_id     String
+  user        User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  name        String
+  image_urls  String[]     @default([])
+  created_at  DateTime     @default(now())
+  updated_at  DateTime     @updatedAt
+  storyboards Storyboard[]
+
+  @@index([user_id])
+  @@map("styles")
 }
 
 enum RenderStyle {

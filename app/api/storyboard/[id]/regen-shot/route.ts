@@ -3,6 +3,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
+import { loadStyleImages } from '@/src/lib/styles';
 import { getReferenceStills, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imageCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -113,7 +114,7 @@ async function generateOneShot(
   styleDeclaration: string,
   conditioningEntities: { name: string; url: string }[],
   _prevFrameResult: null = null,
-  styleRefImage: { data: string; mimeType: string } | null = null,
+  styleRefImages: { data: string; mimeType: string }[] = [],
 ): Promise<{ data: string; mimeType: string } | null> {
   const entityResults = await Promise.all(
     conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
@@ -131,9 +132,11 @@ async function generateOneShot(
   parts.push({ text: styleDeclaration });
 
   // Style reference image (STYLE_REF mode) — injected after the style declaration.
-  if (styleRefImage) {
-    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. This image defines the output medium — do NOT copy any characters, objects, locations, or composition from it.]' });
-    parts.push({ inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } });
+  if (styleRefImages.length > 0) {
+    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. These images together define the output medium — do NOT copy any characters, objects, locations, or composition from them.]' });
+    for (const img of styleRefImages) {
+      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
+    }
   }
 
   if (loadedEntities.length > 0) {
@@ -223,7 +226,7 @@ export async function POST(
   const db = getDb();
   const storyboard = await db.storyboard.findUnique({
     where: { id },
-    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true, style_id: true },
   });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
@@ -332,10 +335,10 @@ export async function POST(
   const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar);
   const ai = new GoogleGenAI({ apiKey });
 
-  // Fetch style reference image once for STYLE_REF mode.
-  const styleRefImage = renderStyle === 'STYLE_REF' && storyboard.style_ref_url
-    ? await fetchImageAsBase64(storyboard.style_ref_url)
-    : null;
+  // Fetch the style's images once for STYLE_REF mode.
+  const styleRefImages = renderStyle === 'STYLE_REF'
+    ? await loadStyleImages(db, storyboard)
+    : [];
 
   // Charge for the one image, refunded below if the model doesn't deliver.
   let chargedCredits = 0;
@@ -355,7 +358,7 @@ export async function POST(
 
   let img: { data: string; mimeType: string } | null;
   try {
-    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, null, styleRefImage);
+    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, null, styleRefImages);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await refundCharge(`Shot ${shotNumber} regen failed`);

@@ -8,6 +8,8 @@ export const dynamic = 'force-dynamic';
 const BodySchema = z.object({
   render_style: z.enum(['PHOTOREAL', 'WATERCOLOUR_SKETCH', 'STYLE_REF']),
   image_model: z.string().min(1),
+  // Named style backing STYLE_REF mode. Null clears it.
+  style_id: z.string().nullable().optional(),
 });
 
 export async function POST(
@@ -33,12 +35,24 @@ export async function POST(
     return Response.json({ error: 'Invalid body', details: parsed.error.flatten() }, { status: 422 });
   }
 
+  // Only styles owned by the caller can be attached to a board.
+  if (parsed.data.style_id) {
+    const style = await getDb().style.findFirst({
+      where: { id: parsed.data.style_id, user_id: auth.uid },
+      select: { id: true },
+    });
+    if (!style) {
+      return Response.json({ error: 'Style not found' }, { status: 404 });
+    }
+  }
+
   try {
     await getDb().storyboard.update({
       where: { id },
       data: {
         render_style: parsed.data.render_style,
         image_model: parsed.data.image_model,
+        ...(parsed.data.style_id !== undefined ? { style_id: parsed.data.style_id } : {}),
       },
     });
   } catch (err) {

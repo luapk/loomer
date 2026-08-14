@@ -3,6 +3,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
+import { loadStyleImages } from '@/src/lib/styles';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
 import type { RefEntity } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -68,17 +69,18 @@ async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-  // styleRefImage is passed as the first conditioning part in STYLE_REF mode.
-  styleRefImage: { data: string; mimeType: string } | null = null,
+  // Style reference images are passed as the first conditioning parts in
+  // STYLE_REF mode — a named style carries up to 4 of them.
+  styleRefImages: { data: string; mimeType: string }[] = [],
 ): Promise<{ data: string; mimeType: string }> {
   const delays = [5000, 15000, 30000];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
-  const contents: any = styleRefImage
+  const contents: any = styleRefImages.length > 0
     ? [{
         role: 'user',
         parts: [
-          { text: '[STYLE REFERENCE: Match this visual style exactly — colour palette, lighting, rendering technique, texture. Do NOT copy any subject, character, or composition from it.]' },
-          { inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } },
+          { text: '[STYLE REFERENCE: The image(s) below define one visual style — match its colour palette, lighting, rendering technique, and texture exactly. Do NOT copy any subject, character, or composition from them.]' },
+          ...styleRefImages.map((img) => ({ inlineData: { data: img.data, mimeType: img.mimeType } })),
           { text: prompt },
         ],
       }]
@@ -160,7 +162,7 @@ export async function POST(
 
   const storyboard = await getDb().storyboard.findUnique({
     where: { id },
-    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true, style_id: true },
   });
   if (!storyboard) {
     return new Response(JSON.stringify({ error: 'Storyboard not found' }), { status: 404 });
@@ -178,11 +180,11 @@ export async function POST(
   const model = storyboard.image_model ?? 'gemini-2.5-flash-image';
   const renderStyle = storyboard.render_style;
 
-  // For STYLE_REF mode, fetch the style reference image once to be injected
-  // as a conditioning image alongside every entity prompt.
-  const styleRefImage = renderStyle === 'STYLE_REF' && storyboard.style_ref_url
-    ? await fetchImageAsBase64(storyboard.style_ref_url)
-    : null;
+  // For STYLE_REF mode, fetch the style's images once to be injected as
+  // conditioning alongside every entity prompt.
+  const styleRefImages = renderStyle === 'STYLE_REF'
+    ? await loadStyleImages(getDb(), storyboard)
+    : [];
 
   const entities: RefEntity[] = [
     ...parsed.characters.map((c) => ({
@@ -276,7 +278,7 @@ export async function POST(
             // calls max) that rate limiting is not a concern.
             const candidateResults = await Promise.allSettled(
               [0, 1].map(async (j): Promise<string> => {
-                const img = await generateOneImage(ai, model, prompt, styleRefImage);
+                const img = await generateOneImage(ai, model, prompt, styleRefImages);
                 const url = await uploadCandidate(id, entity.id, j, img, runId);
                 send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
                 return url;

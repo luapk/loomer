@@ -4,6 +4,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
+import { loadStyleImages } from '@/src/lib/styles';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
@@ -35,13 +36,15 @@ async function generateOneImage(
   ai: GoogleGenAI,
   model: string,
   prompt: string,
-  styleRefImage: { data: string; mimeType: string } | null = null,
+  styleRefImages: { data: string; mimeType: string }[] = [],
 ): Promise<{ data: string; mimeType: string }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GoogleGenAI Part type varies by version
   const parts: any[] = [];
-  if (styleRefImage) {
+  if (styleRefImages.length > 0) {
     parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. This image defines the output medium — do NOT copy any characters, objects, locations, or composition from it.]' });
-    parts.push({ inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } });
+    for (const img of styleRefImages) {
+      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
+    }
   }
   parts.push({ text: prompt });
 
@@ -104,7 +107,7 @@ export async function POST(
   const db = getDb();
   const storyboard = await db.storyboard.findUnique({
     where: { id },
-    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true, style_id: true },
   });
   if (!storyboard) {
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
@@ -151,21 +154,11 @@ export async function POST(
 
   const ai = new GoogleGenAI({ apiKey });
 
-  // STYLE_REF mode: fetch the style reference once so fine-tuned alts match
-  // the uploaded style instead of falling back to the house photoreal look.
-  let styleRefImage: { data: string; mimeType: string } | null = null;
-  if (renderStyle === 'STYLE_REF' && storyboard.style_ref_url) {
-    try {
-      const res = await fetch(storyboard.style_ref_url);
-      if (res.ok) {
-        const contentType = res.headers.get('content-type') ?? 'image/jpeg';
-        styleRefImage = {
-          data: Buffer.from(await res.arrayBuffer()).toString('base64'),
-          mimeType: contentType.split(';')[0]?.trim() ?? 'image/jpeg',
-        };
-      }
-    } catch { /* fall back to prompt-only */ }
-  }
+  // STYLE_REF mode: fetch the style's images so fine-tuned alts match the
+  // saved style instead of falling back to the house photoreal look.
+  const styleRefImages = renderStyle === 'STYLE_REF'
+    ? await loadStyleImages(db, storyboard)
+    : [];
 
   // Charge for both candidates up front; whichever fails is refunded below.
   const CANDIDATES = 2;
@@ -187,7 +180,7 @@ export async function POST(
   const timestamp = Date.now();
   const results = await Promise.allSettled(
     [0, 1].map(async (j) => {
-      const img = await generateOneImage(ai, model, finalPrompt, styleRefImage);
+      const img = await generateOneImage(ai, model, finalPrompt, styleRefImages);
       const buffer = Buffer.from(img.data, 'base64');
       const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
       const blob = await put(

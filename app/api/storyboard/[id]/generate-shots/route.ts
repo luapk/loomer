@@ -3,6 +3,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
+import { loadStyleImages } from '@/src/lib/styles';
 import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -166,9 +167,10 @@ async function generateOneShot(
   // rather than reading it as a spatial reference. The style mismatch in
   // watercolour mode acts as a natural barrier against this.
   prevFrameUrl: string | null,
-  // styleRefImage is used in STYLE_REF mode — injected first as a style-only
-  // conditioning image before any identity references.
-  styleRefImage: { data: string; mimeType: string } | null = null,
+  // styleRefImages are used in STYLE_REF mode — injected first as style-only
+  // conditioning images before any identity references. A named style carries
+  // up to 4.
+  styleRefImages: { data: string; mimeType: string }[] = [],
 ): Promise<{ data: string; mimeType: string } | null> {
   const prevFrameResult = prevFrameUrl ? await fetchImageAsBase64(prevFrameUrl) : null;
 
@@ -181,9 +183,11 @@ async function generateOneShot(
 
   // Style reference image (STYLE_REF mode) — injected immediately after the
   // style declaration so the medium is locked before identity refs are shown.
-  if (styleRefImage) {
-    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. This image defines the output medium — do NOT copy any characters, objects, locations, or composition from it.]' });
-    parts.push({ inlineData: { data: styleRefImage.data, mimeType: styleRefImage.mimeType } });
+  if (styleRefImages.length > 0) {
+    parts.push({ text: '[STYLE REFERENCE — Match this visual style exactly. Reproduce its colour palette, lighting quality, rendering technique, texture, line quality, and overall aesthetic. These images together define the output medium — do NOT copy any characters, objects, locations, or composition from them.]' });
+    for (const img of styleRefImages) {
+      parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
+    }
   }
 
   // Spatial continuity reference — only used in watercolour mode where the
@@ -266,7 +270,7 @@ export async function POST(
   const db = getDb();
   const storyboard = await db.storyboard.findUnique({
     where: { id },
-    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true },
+    select: { parsed_json: true, image_model: true, render_style: true, style_ref_url: true, style_id: true },
   });
   if (!storyboard) {
     return new Response(JSON.stringify({ error: 'Storyboard not found' }), { status: 404 });
@@ -288,10 +292,10 @@ export async function POST(
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
 
-  // Fetch style reference image once for STYLE_REF mode.
-  const styleRefImage = renderStyle === 'STYLE_REF' && storyboard.style_ref_url
-    ? await fetchImageAsBase64(storyboard.style_ref_url)
-    : null;
+  // Fetch the style's images once for STYLE_REF mode.
+  const styleRefImages = renderStyle === 'STYLE_REF'
+    ? await loadStyleImages(db, storyboard)
+    : [];
 
   // Build entity name lookup for labelled conditioning
   const entityNames: Record<string, string> = {};
@@ -477,7 +481,7 @@ export async function POST(
                 // in photoreal mode Gemini composites the image content rather than
                 // reading it as a spatial reference.
                 const prevFrameForShot = renderStyle === 'WATERCOLOUR_SKETCH' ? prevShotUrl : null;
-                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevFrameForShot, styleRefImage);
+                const img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, prevFrameForShot, styleRefImages);
 
                 if (!img) {
                   const durationMs = Date.now() - shotStart;
