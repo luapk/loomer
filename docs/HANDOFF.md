@@ -107,6 +107,19 @@ The list page's standalone sign-out button was removed — the menu carries it.
 
 ---
 
+## 4b. Error monitoring
+
+Sentry is wired up and **live in production** — server, browser and root-layout
+errors all report. `src/lib/sentry-scrub.ts` drops request bodies wholesale
+(the pasted script is a request body), strips cookies and auth headers, and
+truncates any string over 500 chars. Session Replay is deliberately off.
+
+Client tracing is tree-shaken out (`__SENTRY_TRACING__: false` in
+`next.config.ts`), holding the browser cost to +34 kB.
+
+`/api/debug-sentry` is an admin-only smoke test; `?throw=1` exercises the
+automatic capture path. Full write-up: `docs/decisions/REVISIT-observability.md`.
+
 ## 5. Loose ends and gotchas
 
 - **`npm run lint` is broken** and was already broken before this session.

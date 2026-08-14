@@ -61,7 +61,17 @@ That 34 kB is the price of client-side error reporting. If it ever matters more
 than the visibility does, the client init can be dropped and server-only
 monitoring kept.
 
-## What Paul needs to do
+## Status: live and verified (14 Aug 2026)
+
+`SENTRY_DSN` is set in Vercel production. Verified end to end:
+`/api/debug-sentry` returned `configured: true` with an accepted event id, and
+`?throw=1` produced a real issue plus an email alert — confirming the automatic
+`onRequestError` path works, not just manual capture.
+
+Still unverified: the browser SDK (`NEXT_PUBLIC_SENTRY_DSN`). Throw an error in
+the devtools console and check it lands in Sentry.
+
+## Original setup steps (done)
 
 1. Create a project at sentry.io (Next.js platform).
 2. In Vercel → Settings → Environment Variables, set `SENTRY_DSN` and
