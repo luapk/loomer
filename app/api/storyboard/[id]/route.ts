@@ -29,15 +29,21 @@ export async function GET(
     return NextResponse.json({ error: 'Storyboard not found' }, { status: 404 });
   }
 
-  const [refStills, shotFrames] = await Promise.all([
+  const [refStills, shotFrames, voiceOvers] = await Promise.all([
     getReferenceStills(db, id),
     getShotFrames(db, id),
+    db.shotVoiceOver.findMany({
+      where: { storyboard_id: id },
+      orderBy: { shot_number: 'asc' },
+      select: { shot_number: true, voice: true, text: true, url: true, duration_ms: true },
+    }),
   ]);
 
   return NextResponse.json({
     ...storyboard,
     reference_stills: Object.keys(refStills).length > 0 ? refStills : null,
     shot_key_frames: Object.keys(shotFrames).length > 0 ? shotFrames : null,
+    voice_overs: voiceOvers,
   });
 }
 

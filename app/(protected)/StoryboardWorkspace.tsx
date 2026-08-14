@@ -15,6 +15,8 @@ import dynamic from 'next/dynamic';
 import { CameraArrows } from './CameraArrows';
 import { ExportMenu } from './ExportMenu';
 import { InsertFrameDialog } from './InsertFrameDialog';
+import { VoiceOverPanel, type VoiceOver } from './VoiceOverPanel';
+import { voiceOverLines } from '@/src/lib/voice-over';
 import { WaitCard } from './WaitCard';
 
 // Animatic carries canvas playback + MediaRecorder export (~600 lines) that
@@ -180,6 +182,10 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   // 0 = current (latest), 1 = previous, 2 = two renders ago, …
   const [shotHistoryIndex, setShotHistoryIndex] = useState<Record<string, number>>({});
 
+  // Voice-over audio, keyed by shot in the panel; loaded with the board.
+  const [voiceOvers, setVoiceOvers] = useState<VoiceOver[]>([]);
+  const [savedVoice, setSavedVoice] = useState<string | null>(null);
+
   // Saved director styles (see /styles) — the STYLE_REF options in the picker.
   const [savedStyles, setSavedStyles] = useState<SavedStyle[]>([]);
   const [styleId, setStyleId] = useState<string | null>(null);
@@ -256,6 +262,8 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
         status: string;
         render_style: RenderStyle;
         style_id: string | null;
+        voice_overs?: VoiceOver[];
+        vo_voice?: string | null;
         image_model: string | null;
         style_ref_url: string | null;
         audio_url: string | null;
@@ -266,6 +274,8 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
       }) => {
         if (data.render_style) setRenderStyle(data.render_style);
         if (data.style_id) setStyleId(data.style_id);
+        if (data.voice_overs) setVoiceOvers(data.voice_overs);
+        if (data.vo_voice) setSavedVoice(data.vo_voice);
         if (data.audio_url) {
           setAudioUrl(data.audio_url);
           setAudioTrimStart(data.audio_trim_start ?? 0);
@@ -1355,6 +1365,23 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             </div>
           </div>
 
+          {/* Voice-over — only meaningful once the board has shots */}
+          {'id' in state && activeTab === 'boards' && (
+            <div className="pt-4 border-t border-stone-200/70">
+              <VoiceOverPanel
+                storyboardId={state.id}
+                lineCount={voiceOverLines(
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- parsedJson is untyped board JSON
+                  ((state.parsedJson as any)?.shots ?? []) as { shot_number: number; dialogue_vo?: string | null }[],
+                ).length}
+                voiceOvers={voiceOvers}
+                savedVoice={savedVoice}
+                onChange={setVoiceOvers}
+                onCreditError={(message) => setNotice({ message, action: 'billing' })}
+              />
+            </div>
+          )}
+
           {/* Model picker */}
           <div className="space-y-2">
             <p className="text-xs font-medium text-stone-600">Image model</p>
@@ -2124,10 +2151,10 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                 <button
                   type="button"
                   onClick={() => setInsertAt((state.parsedJson?.shots ?? []).length + 1)}
-                  className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-700 border border-dashed border-stone-300 hover:border-stone-500 rounded-full px-3 py-1.5 transition-colors bg-white/50"
+                  className="flex items-center gap-1.5 text-xs text-stone-500 hover:text-stone-900 border border-dashed border-stone-300 hover:border-stone-500 rounded-full px-4 py-2 transition-colors bg-white"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  Add frame
+                  Add frame at end
                 </button>
               )}
             </div>
@@ -2163,6 +2190,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
           storyboardId={'id' in state ? state.id : undefined}
           initialAudioUrl={audioUrl}
           initialTrimStart={audioTrimStart}
+          voiceOvers={voiceOvers}
         />
       )}
 

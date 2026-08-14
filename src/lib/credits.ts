@@ -30,6 +30,9 @@ const DEFAULT_IMAGE_COST = 3;
 /** Credits charged for a script parse (~$0.10 of Claude). */
 export const PARSE_CREDIT_COST = 2;
 
+/** Credits per voice-over line rendered (ElevenLabs bills per character). */
+export const VO_CREDIT_COST = 1;
+
 /** Credits granted to a new account so the tool can be tried before paying. */
 export const SIGNUP_BONUS_CREDITS = 30;
 

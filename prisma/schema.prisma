@@ -80,11 +80,14 @@ model Storyboard {
   // Mood-film audio track (animatic): uploaded music + trim-in point (seconds).
   audio_url         String?
   audio_trim_start  Float            @default(0)
+  // ElevenLabs voice chosen for this board's voice-over (see src/lib/elevenlabs.ts).
+  vo_voice          String?
   created_at        DateTime         @default(now())
   updated_at      DateTime         @updatedAt
 
   shot_frames      ShotFrame[]
   ref_stills       ReferenceStill[]
+  voice_overs      ShotVoiceOver[]
 
   @@index([user_id])
   @@map("storyboards")
@@ -106,6 +109,26 @@ model ShotFrame {
 
   @@unique([storyboard_id, shot_number])
   @@map("shot_frames")
+}
+
+// One row per shot that has a voice-over line. Separate from ShotFrame so
+// re-rendering an image never disturbs its audio, and vice versa.
+model ShotVoiceOver {
+  id            String     @id @default(uuid())
+  storyboard_id String
+  shot_number   Int
+  // The voice slot used (see VOICES in src/lib/elevenlabs.ts), kept so the UI
+  // can show when a line was cut with a voice the board no longer uses.
+  voice         String
+  // The line as spoken — lets us skip regeneration when nothing changed.
+  text          String     @db.Text
+  url           String
+  duration_ms   Int?
+  updated_at    DateTime   @updatedAt
+  storyboard    Storyboard @relation(fields: [storyboard_id], references: [id], onDelete: Cascade)
+
+  @@unique([storyboard_id, shot_number])
+  @@map("shot_voice_overs")
 }
 
 // One row per Bible entity's reference still state.

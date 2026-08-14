@@ -15,6 +15,8 @@ interface AnimaticProps {
   storyboardId?: string;
   initialAudioUrl?: string | null;
   initialTrimStart?: number;
+  /** Per-shot voice-over audio, played as each frame comes up. */
+  voiceOvers?: { shot_number: number; url: string }[];
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -60,9 +62,31 @@ export function Animatic({
   storyboardId,
   initialAudioUrl = null,
   initialTrimStart = 0,
+  voiceOvers = [],
 }: AnimaticProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
+
+  // Voice-over: url per shot number, plus measured durations so a frame is
+  // held long enough for its line to finish rather than cutting it off.
+  const voByShot = useRef<Map<number, string>>(new Map());
+  const voDurations = useRef<Map<number, number>>(new Map());
+  const voAudioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    voByShot.current = new Map(voiceOvers.map((v) => [v.shot_number, v.url]));
+    // Metadata-only load: enough to learn duration without fetching the body.
+    for (const vo of voiceOvers) {
+      if (voDurations.current.has(vo.shot_number)) continue;
+      const probe = new Audio();
+      probe.preload = 'metadata';
+      probe.onloadedmetadata = () => {
+        if (Number.isFinite(probe.duration)) {
+          voDurations.current.set(vo.shot_number, probe.duration * 1000);
+        }
+      };
+      probe.src = vo.url;
+    }
+  }, [voiceOvers]);
   const [speed, setSpeed] = useState<Speed>(1);
   const [dissolve, setDissolve] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -126,10 +150,29 @@ export function Animatic({
     clearTimer();
     if (!playing) return;
     if (!currentShot) { setPlaying(false); return; }
-    const delay = holdMs1x(currentShot) / speed;
-    timerRef.current = setTimeout(advance, delay);
+    const shotNumber = Number(currentShot.shot_number);
+    const voUrl = voByShot.current.get(shotNumber);
+
+    // Play this frame's line as it comes up.
+    voAudioRef.current?.pause();
+    if (voUrl) {
+      const audio = new Audio(voUrl);
+      voAudioRef.current = audio;
+      void audio.play().catch(() => { /* autoplay blocked until user gesture */ });
+    }
+
+    // A frame never cuts its own line off: hold for whichever is longer.
+    const base = holdMs1x(currentShot) / speed;
+    const voMs = voUrl ? (voDurations.current.get(shotNumber) ?? 0) + 250 : 0;
+    timerRef.current = setTimeout(advance, Math.max(base, voMs));
     return clearTimer;
   }, [playing, currentIndex, speed, currentShot, advance, clearTimer]);
+
+  // Silence the line the moment playback stops, and on unmount.
+  useEffect(() => {
+    if (!playing) voAudioRef.current?.pause();
+  }, [playing]);
+  useEffect(() => () => { voAudioRef.current?.pause(); }, []);
 
   // Dissolve overlay: when the frame URL changes during playback, fade the
   // previous frame out over the new one.
