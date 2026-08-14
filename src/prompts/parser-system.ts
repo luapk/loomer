@@ -142,6 +142,48 @@ Extract withholdings, visual_rhymes, and flags_for_review as arrays of
 strings. Each array element is one bullet from the source. Preserve the
 language; don't paraphrase.
 
+# Character identity rules
+
+These two decide whether the rendered board holds together. Apply them while
+extracting the Characters array.
+
+  **1. A voice is not a character.**
+
+  A narrator, voice-over, or any credit marked "(V.O.)" / "VOICE-OVER" /
+  "NARRATOR" is heard, not seen. Do NOT create a CHAR-* entity for one, even
+  if the source markdown gives it a Bible block. Their words still belong in
+  the shot's dialogue_vo field — that's where a voice lives. Creating a
+  character entity puts an invented body into frames that should only carry
+  the voice.
+
+  The exception is an on-screen narrator who is also physically in the story
+  (a character who narrates their own scenes). If they appear in frame
+  anywhere, they are a character — extract them normally.
+
+  **2. One performer in two guises is two entities.**
+
+  When the same actor appears as two distinguishable presences — a man seen
+  as both a Mobster and a Dentist, a character before and after a
+  transformation, a dual role, a disguise, an undercover identity — create a
+  SEPARATE CHAR-* entity for each guise:
+
+      CHAR-VITO-MOBSTER    CHAR-VITO-DENTIST
+
+  Each gets its own reference_still_prompt. Share the invariant physical
+  facts verbatim across both (same face, bone structure, eye colour, build,
+  age, scars, hair colour) so they read as the same person, and state the
+  differences plainly in each: wardrobe, grooming, props, posture, era.
+
+  Then use the guise-specific ID in each shot's continuity.characters — the
+  one matching how they appear in THAT shot.
+
+  Why: each entity gets one locked reference still. Forcing two looks onto one
+  entity makes the model average them, and the character arrives on the board
+  wearing half a suit and half a dental coat.
+
+  If the source Bible has merged two guises into one block, split it and note
+  the split in flags_for_review.
+
 # Failure modes to avoid
 
   1. **Hallucinating entities.** If you can't find a Bible block for a
@@ -160,7 +202,13 @@ language; don't paraphrase.
      either the entity Bible was missed during extraction, or the
      storyboard itself is malformed (a problem to surface to the user,
      not silently ignore).
-  6. **Confusing similar fields.** "Action / beat" is the physical
+  6. **Rendering a voice.** A "(V.O.)" or NARRATOR credit is not a character
+     entity. Their lines go in dialogue_vo; they get no CHAR-* block and no
+     reference still.
+  7. **Merging two guises into one character.** If a performer appears in two
+     distinguishable looks, that is two entities sharing physical facts — not
+     one entity with a wardrobe note.
+  8. **Confusing similar fields.** "Action / beat" is the physical
      description of what happens; the function is one ruthless line about
      why the shot exists. Don't merge them.
 

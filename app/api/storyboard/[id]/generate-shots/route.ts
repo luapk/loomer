@@ -4,6 +4,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { loadStyleImages, loadStyleSummary, styleDirective, MAX_STYLE_IMAGES_PER_SHOT } from '@/src/lib/styles';
+import { isVoiceOnlyCharacter } from '@/src/lib/character-identity';
 import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -458,7 +459,9 @@ export async function POST(
 
                 // Primary: entities explicitly in this shot's continuity.
                 const continuityIds = new Set<string>([
-                  ...shot.continuity.characters,
+                  ...shot.continuity.characters.filter(
+                    (cid) => !isVoiceOnlyCharacter(cid, entityNames[cid] ?? ''),
+                  ),
                   shot.continuity.location_id,
                   ...shot.continuity.props_persisting,
                   ...shot.continuity.props_introduced,

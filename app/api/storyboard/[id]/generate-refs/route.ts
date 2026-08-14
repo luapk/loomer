@@ -4,6 +4,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { loadStyleImages, loadStyleSummary } from '@/src/lib/styles';
+import { partitionByVoiceOnly } from '@/src/lib/character-identity';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
 import type { RefEntity } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
@@ -176,8 +177,13 @@ export async function POST(
     ? await loadStyleSummary(getDb(), storyboard)
     : null;
 
+  // A narrator or "(V.O.)" credit is a voice, not a body. Giving one a
+  // reference still puts an invented person into frames that should carry
+  // only the voice.
+  const { rendered: renderableCharacters, voiceOnly } = partitionByVoiceOnly(parsed.characters);
+
   const entities: RefEntity[] = [
-    ...parsed.characters.map((c) => ({
+    ...renderableCharacters.map((c) => ({
       id: c.id, name: c.name, type: 'character' as const,
       reference_still_prompt: c.reference_still_prompt, aspectRatio: '3:4' as const,
     })),
@@ -248,6 +254,13 @@ export async function POST(
 
       try {
         send({ type: 'start', total: entitiesToGenerate.length });
+        for (const voice of voiceOnly) {
+          send({
+            type: 'ref_warning',
+            entityId: voice.id,
+            message: `${voice.name} is a voice-over credit — no reference still generated, and they won't be rendered into frames.`,
+          });
+        }
 
         // Process up to 3 entities concurrently (6 Gemini calls max in flight).
         // generateOneImage already retries on 429 with backoff, so transient
