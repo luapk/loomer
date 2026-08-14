@@ -139,6 +139,68 @@ export async function POST(
 }
 
 // ---------------------------------------------------------------------------
+// DELETE — remove the shot at ?shotNumber= (1-based) and close the gap
+// ---------------------------------------------------------------------------
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  const auth = await requireSession();
+  if (auth instanceof NextResponse) return auth;
+  const accessError = await assertStoryboardAccess(getDb(), id, auth);
+  if (accessError) return accessError;
+
+  const shotNumber = Number(request.nextUrl.searchParams.get('shotNumber'));
+  if (!Number.isInteger(shotNumber) || shotNumber < 1) {
+    return NextResponse.json({ error: 'shotNumber must be a positive integer' }, { status: 422 });
+  }
+
+  const db = getDb();
+  const row = await db.storyboard.findUnique({ where: { id }, select: { parsed_json: true } });
+  if (!row?.parsed_json) {
+    return NextResponse.json({ error: 'Storyboard not yet parsed' }, { status: 422 });
+  }
+  const board = row.parsed_json as unknown as ParsedStoryboard;
+  const shots = [...board.shots];
+  if (shotNumber > shots.length) {
+    return NextResponse.json({ error: 'No such shot' }, { status: 404 });
+  }
+  if (shots.length === 1) {
+    return NextResponse.json({ error: 'A storyboard needs at least one frame' }, { status: 422 });
+  }
+
+  shots.splice(shotNumber - 1, 1);
+  const renumbered = renumber(shots);
+
+  // Drop the frame row, then pull everything above it down one. Ascending order
+  // means each slot is already free by the time the next row moves into it.
+  const rowsToShift = await db.shotFrame.findMany({
+    where: { storyboard_id: id, shot_number: { gt: shotNumber } },
+    orderBy: { shot_number: 'asc' },
+    select: { id: true, shot_number: true },
+  });
+  await db.$transaction([
+    db.shotFrame.deleteMany({ where: { storyboard_id: id, shot_number: shotNumber } }),
+    ...rowsToShift.map((r) =>
+      db.shotFrame.update({ where: { id: r.id }, data: { shot_number: r.shot_number - 1 } }),
+    ),
+    db.storyboard.update({
+      where: { id },
+      data: {
+        parsed_json: { ...board, shots: renumbered, total_shots: renumbered.length } as unknown as Prisma.InputJsonValue,
+        shot_count: renumbered.length,
+      },
+    }),
+  ]);
+
+  // The blob itself is left in place — deletes are cheap to skip and the URL is
+  // no longer referenced by anything.
+  return NextResponse.json({ ok: true, totalShots: renumbered.length });
+}
+
+// ---------------------------------------------------------------------------
 // PATCH — reorder: move the shot at `from` to position `to` (both 1-based)
 // ---------------------------------------------------------------------------
 

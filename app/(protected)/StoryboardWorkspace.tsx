@@ -9,7 +9,7 @@ import {
   Loader2, ChevronRight, AlertTriangle, CheckCircle2,
   Camera, Paintbrush, Check, ImageIcon, Upload,
   Film, Download, ScanEye, Pencil, Bell, BellOff, X,
-  ChevronLeft, ChevronRight as ChevronRightIcon, Plus, GripVertical,
+  ChevronLeft, ChevronRight as ChevronRightIcon, Plus, GripVertical, Trash2,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { CameraArrows } from './CameraArrows';
@@ -166,6 +166,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   const [showArrows, setShowArrows] = useState(false);
   // Manual frame insertion + drag reorder (boards tab)
   const [insertAt, setInsertAt] = useState<number | null>(null); // 1-based position
+  const [pendingDelete, setPendingDelete] = useState<number | null>(null); // shot awaiting confirm
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null); // 0-based
   const [dragOverZone, setDragOverZone] = useState<number | null>(null); // zone index
 
@@ -379,6 +380,40 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
     } catch {
       setShotKeyFrames((prev) => ({ ...prev, [key]: { status: 'error', url: null, error: 'Network error — use ↺ to retry' } }));
     }
+  }
+
+  /** Remove a frame from the board, closing the gap. */
+  async function deleteShot(storyboardId: string, shotNumber: number) {
+    if (!('parsedJson' in state)) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shots = [...(state.parsedJson as any).shots];
+    if (shots.length <= 1) return;
+    setPendingDelete(null);
+
+    // Optimistic: drop the shot, renumber, shift frames above it down one.
+    const remaining = shots
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .filter((s: any) => (s.shot_number as number) !== shotNumber)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((s: any, i: number) => ({ ...s, shot_number: i + 1 }));
+    const nextFrames: ShotKeyFrames = {};
+    for (const [k, v] of Object.entries(shotKeyFrames)) {
+      const num = Number(k);
+      if (num === shotNumber) continue;
+      nextFrames[String(num > shotNumber ? num - 1 : num)] = v;
+    }
+    setState({ ...state, parsedJson: { ...(state.parsedJson as object), shots: remaining } } as typeof state);
+    setShotKeyFrames(nextFrames);
+    setShotHistoryIndex({});
+    // Issue shot numbers no longer line up once the board renumbers.
+    setContinuityIssues([]);
+    setContinuitySummary(null);
+
+    const res = await fetch(
+      `/api/storyboard/${storyboardId}/shots?shotNumber=${shotNumber}`,
+      { method: 'DELETE' },
+    );
+    if (!res.ok) await refreshBoard(storyboardId); // resync on failure
   }
 
   /** Drop handler: move the dragged card so it lands at zone `zoneIdx`. */
@@ -1787,6 +1822,41 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                       title="Drag to reorder"
                     >
                       <GripVertical className="h-3.5 w-3.5 text-stone-600" />
+                    </div>
+                  )}
+                  {/* Delete frame — two-step, confirm replaces the card overlay */}
+                  {'id' in state && !shotsGenerating && (state.parsedJson as { shots?: unknown[] })?.shots
+                    && ((state.parsedJson as { shots: unknown[] }).shots.length > 1) && (
+                    <div className="absolute top-2 left-11 z-10">
+                      {pendingDelete === (shot.shot_number as number) ? (
+                        <div className="flex items-center gap-1 rounded-full bg-white/95 shadow-sm pl-2.5 pr-1 py-1">
+                          <span className="text-[11px] text-stone-700 whitespace-nowrap">Delete frame?</span>
+                          <button
+                            type="button"
+                            onClick={() => { void deleteShot(state.id, shot.shot_number as number); }}
+                            className="h-5 px-1.5 rounded text-[11px] font-medium text-red-600 hover:bg-red-50 transition-colors"
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPendingDelete(null)}
+                            className="h-5 w-5 flex items-center justify-center rounded hover:bg-stone-100 transition-colors"
+                            title="Keep"
+                          >
+                            <X className="h-3 w-3 text-stone-500" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPendingDelete(shot.shot_number as number)}
+                          className="h-7 w-7 flex items-center justify-center rounded-full bg-white/80 shadow-sm opacity-0 group-hover/card:opacity-100 transition-opacity hover:text-red-600"
+                          title="Delete this frame"
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-stone-600 hover:text-red-600" />
+                        </button>
+                      )}
                     </div>
                   )}
                   {frame?.status === 'done' && displayUrl ? (
