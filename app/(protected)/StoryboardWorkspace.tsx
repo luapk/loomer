@@ -167,6 +167,8 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   // Manual frame insertion + drag reorder (boards tab)
   const [insertAt, setInsertAt] = useState<number | null>(null); // 1-based position
   const [pendingDelete, setPendingDelete] = useState<number | null>(null); // shot awaiting confirm
+  // Set when a route refuses for lack of credits (402) — surfaced as a banner.
+  const [creditError, setCreditError] = useState<string | null>(null);
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null); // 0-based
   const [dragOverZone, setDragOverZone] = useState<number | null>(null); // zone index
 
@@ -451,9 +453,21 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
     if (!res.ok) await refreshBoard(storyboardId); // resync on failure
   }
 
+  /**
+   * True when the response was a credit refusal. Stores the message so the
+   * banner can explain exactly how short the balance is.
+   */
+  async function handledInsufficientCredits(res: Response): Promise<boolean> {
+    if (res.status !== 402) return false;
+    const data = await res.json().catch(() => ({})) as { error?: string };
+    setCreditError(data.error ?? 'Not enough credits to run this.');
+    return true;
+  }
+
   async function startGeneration(id: string, force = false) {
     if (refsInFlight.current) return;
     refsInFlight.current = true;
+    setCreditError(null);
     // Save settings, then start the SSE generation stream
     await fetch(`/api/storyboard/${id}/settings`, {
       method: 'POST',
@@ -484,6 +498,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
 
     if (!res.body || !res.ok) {
       refsInFlight.current = false;
+      await handledInsufficientCredits(res);
       setState((prev) =>
         prev.phase === 'generating_refs' ? { ...prev, phase: 'refs_done' } : prev,
       );
@@ -616,6 +631,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
     }
 
     if (!res.body || !res.ok) {
+      await handledInsufficientCredits(res);
       setState((prev) => (prev.phase === 'generating_shots' ? { ...prev, phase: 'refs_done' } : prev));
       setShotsGenerating(false);
       return;
@@ -1186,6 +1202,27 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
           </div>
         )}
       </div>
+
+      {/* ── Out of credits ── */}
+      {creditError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-amber-900">{creditError}</p>
+            <a href="/billing" className="text-xs text-amber-800 underline hover:text-amber-950 mt-0.5 inline-block">
+              Top up credits
+            </a>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCreditError(null)}
+            className="flex-shrink-0 text-amber-600 hover:text-amber-900 transition-colors"
+            title="Dismiss"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* ── Tab bar — always visible ── */}
       <div className="flex" style={{ borderBottom: '1px solid var(--ink)' }}>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getDb } from '@/src/lib/db';
 import { adminEmails, hashPassword, sessionCookieOptions, signSession, SESSION_COOKIE } from '@/src/lib/auth';
+import { grant, SIGNUP_BONUS_CREDITS } from '@/src/lib/credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,6 +46,10 @@ export async function POST(request: NextRequest) {
     data: { email, password_hash: await hashPassword(parsed.data.password), role },
     select: { id: true, email: true, role: true },
   });
+
+  // Starter credits so the tool can be tried before paying. Without this the
+  // first run is a paywall before anyone has seen it work.
+  await grant(db, user.id, SIGNUP_BONUS_CREDITS, 'signup_bonus', { note: 'Welcome credits' });
 
   const token = signSession({ uid: user.id, email: user.email, role: user.role });
   const response = NextResponse.json({ ok: true, email: user.email, role: user.role });

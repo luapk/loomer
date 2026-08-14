@@ -4,6 +4,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store';
+import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
 
@@ -166,6 +167,21 @@ export async function POST(
     } catch { /* fall back to prompt-only */ }
   }
 
+  // Charge for both candidates up front; whichever fails is refunded below.
+  const CANDIDATES = 2;
+  let chargedCredits = 0;
+  try {
+    chargedCredits = await debit(db, auth, imagesCost(model, CANDIDATES), {
+      storyboardId: id,
+      note: `Fine-tune reference ${entityId}`,
+    });
+  } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return NextResponse.json(insufficientPayload(err), { status: 402 });
+    }
+    throw err;
+  }
+
   // Generate both candidates in parallel — halves user-facing latency; each
   // has its own 429 retry chain inside generateOneImage.
   const timestamp = Date.now();
@@ -186,6 +202,14 @@ export async function POST(
   for (const r of results) {
     if (r.status === 'fulfilled') newUrls.push(r.value);
     else console.error('regen-ref candidate failed:', r.reason instanceof Error ? r.reason.message : String(r.reason));
+  }
+
+  if (chargedCredits > 0 && newUrls.length < CANDIDATES) {
+    const unrendered = CANDIDATES - newUrls.length;
+    await refund(db, auth, imagesCost(model, unrendered), {
+      storyboardId: id,
+      note: `${unrendered} fine-tune candidate${unrendered === 1 ? '' : 's'} did not render`,
+    }).catch(() => { /* best effort */ });
   }
 
   if (newUrls.length === 0) {

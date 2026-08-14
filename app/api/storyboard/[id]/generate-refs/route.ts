@@ -7,6 +7,7 @@ import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store'
 import type { RefEntity } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
+import { debit, refund, imagesCost, imageCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
@@ -211,6 +212,25 @@ export async function POST(
     ? entities
     : entities.filter((e) => !(existing[e.id]?.candidates.length));
 
+  // Charge for the run up front — 2 candidates per entity. Whatever fails is
+  // refunded when the run finishes, so nobody pays for a failed render.
+  const CANDIDATES_PER_ENTITY = 2;
+  const plannedImages = entitiesToGenerate.length * CANDIDATES_PER_ENTITY;
+  let chargedCredits = 0;
+  try {
+    chargedCredits = await debit(db, auth, imagesCost(model, plannedImages), {
+      storyboardId: id,
+      note: `Reference stills — ${plannedImages} images`,
+    });
+  } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return new Response(JSON.stringify(insufficientPayload(err)), {
+        status: 402, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    throw err;
+  }
+
   await Promise.all(entitiesToGenerate.map((entity) =>
     upsertReferenceStill(db, id, entity.id, {
       status: 'pending', candidates: [], selected: existing[entity.id]?.selected ?? null,
@@ -229,6 +249,10 @@ export async function POST(
       const heartbeat = setInterval(() => {
         try { controller.enqueue(encoder.encode(': heartbeat\n\n')); } catch { /* closed */ }
       }, 10000);
+
+      // Images that actually rendered — the shortfall against `plannedImages`
+      // is refunded when the run ends.
+      let imagesRendered = 0;
 
       try {
         send({ type: 'start', total: entitiesToGenerate.length });
@@ -251,7 +275,7 @@ export async function POST(
             // 2 candidates in parallel per entity: small enough fan-out (2 concurrent
             // calls max) that rate limiting is not a concern.
             const candidateResults = await Promise.allSettled(
-              [0, 1].map(async (j) => {
+              [0, 1].map(async (j): Promise<string> => {
                 const img = await generateOneImage(ai, model, prompt, styleRefImage);
                 const url = await uploadCandidate(id, entity.id, j, img, runId);
                 send({ type: 'entity_candidate', entityId: entity.id, url, index: j });
@@ -262,6 +286,7 @@ export async function POST(
             const aiCandidates = candidateResults
               .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
               .map((r) => r.value);
+            imagesRendered += aiCandidates.length;
 
             // If the entity had a user-uploaded selected image, keep it in the
             // candidates list so it remains visible and selectable after redo.
@@ -323,6 +348,17 @@ export async function POST(
         send({ type: 'error', message });
       } finally {
         clearInterval(heartbeat);
+        // Refund whatever didn't render — including everything, if the run
+        // threw before it started.
+        if (chargedCredits > 0) {
+          const unrendered = Math.max(0, plannedImages - imagesRendered);
+          if (unrendered > 0) {
+            await refund(db, auth, imagesCost(model, unrendered), {
+              storyboardId: id,
+              note: `${unrendered} reference still${unrendered === 1 ? '' : 's'} did not render`,
+            }).catch(() => { /* never fail the stream over a refund */ });
+          }
+        }
         controller.close();
       }
     },

@@ -4,6 +4,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, upsertShotFrame } from '@/src/lib/frame-store';
+import { debit, refund, imageCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
@@ -336,15 +337,33 @@ export async function POST(
     ? await fetchImageAsBase64(storyboard.style_ref_url)
     : null;
 
+  // Charge for the one image, refunded below if the model doesn't deliver.
+  let chargedCredits = 0;
+  try {
+    chargedCredits = await debit(db, auth, imageCost(model), {
+      storyboardId: id,
+      note: `Regenerate shot ${shotNumber}`,
+    });
+  } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return NextResponse.json(insufficientPayload(err), { status: 402 });
+    }
+    throw err;
+  }
+  const refundCharge = (note: string) =>
+    refund(db, auth, chargedCredits, { storyboardId: id, note }).catch(() => { /* best effort */ });
+
   let img: { data: string; mimeType: string } | null;
   try {
     img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, null, styleRefImage);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    await refundCharge(`Shot ${shotNumber} regen failed`);
     return NextResponse.json({ error: `Image generation failed: ${message}` }, { status: 502 });
   }
 
   if (!img) {
+    await refundCharge(`Shot ${shotNumber} regen returned no image`);
     return NextResponse.json({ error: 'No image returned from model' }, { status: 502 });
   }
 

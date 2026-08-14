@@ -6,6 +6,7 @@ export const maxDuration = 800;
 
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
+import { debit, refund, PARSE_CREDIT_COST, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import { parseStoryboard } from '@/src/pipeline/02-parse';
 
 export async function POST(
@@ -34,6 +35,19 @@ export async function POST(
     );
   }
 
+  let chargedCredits = 0;
+  try {
+    chargedCredits = await debit(getDb(), auth, PARSE_CREDIT_COST, {
+      storyboardId: id,
+      note: 'Script parse',
+    });
+  } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return NextResponse.json(insufficientPayload(err), { status: 402 });
+    }
+    throw err;
+  }
+
   const markdown = storyboard.source_markdown;
   const encoder = new TextEncoder();
 
@@ -58,6 +72,10 @@ export async function POST(
         });
 
         if (!result.success || !result.storyboard) {
+          if (chargedCredits > 0) {
+            await refund(getDb(), auth, chargedCredits, { storyboardId: id, note: 'Parse failed' })
+              .catch(() => { /* best effort */ });
+          }
           send({
             type: 'error',
             message: 'Parse failed',
@@ -112,6 +130,10 @@ export async function POST(
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        if (chargedCredits > 0) {
+          await refund(getDb(), auth, chargedCredits, { storyboardId: id, note: 'Parse failed' })
+            .catch(() => { /* best effort */ });
+        }
         send({ type: 'error', message: `Parse failed: ${message}` });
       } finally {
         clearInterval(heartbeat);

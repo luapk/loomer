@@ -4,6 +4,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { getReferenceStills, getShotFrames, upsertShotFrame } from '@/src/lib/frame-store';
+import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
 
@@ -335,10 +336,33 @@ export async function POST(
     }
   }
   await Promise.all(resetWrites);
+
+  // Only shots that still need rendering are charged for — an incremental
+  // re-run doesn't re-bill frames that are already done.
+  const plannedShots = parsed.shots.filter(
+    (shot) => shotKeyFrames[String(shot.shot_number)]?.status !== 'done',
+  ).length;
+  let chargedCredits = 0;
+  try {
+    chargedCredits = await debit(db, auth, imagesCost(model, plannedShots), {
+      storyboardId: id,
+      note: `Key frames — ${plannedShots} shots`,
+    });
+  } catch (err) {
+    if (err instanceof InsufficientCreditsError) {
+      return new Response(JSON.stringify(insufficientPayload(err)), {
+        status: 402, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    throw err;
+  }
+
   await db.storyboard.update({ where: { id }, data: { status: 'SHOTS_GENERATING' } });
 
   const readable = new ReadableStream({
     async start(controller) {
+      // Frames that actually rendered; the shortfall is refunded at the end.
+      let framesRendered = 0;
       const send = (obj: Record<string, unknown>) => {
         try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch { /* disconnected */ }
       };
@@ -479,6 +503,7 @@ export async function POST(
                 const prevHistory = prev?.history ?? [];
                 const history = prevUrl ? [prevUrl, ...prevHistory].slice(0, 10) : prevHistory;
                 shotKeyFrames[shotKey] = { status: 'done', url: blob.url, history };
+                framesRendered += 1;
                 await upsertShotFrame(db, id, shot.shot_number, shotKeyFrames[shotKey]!);
 
                 send({ type: 'shot_done', shotNumber: shot.shot_number, url: blob.url, durationMs });
@@ -514,6 +539,15 @@ export async function POST(
         send({ type: 'error', message });
       } finally {
         clearInterval(heartbeat);
+        if (chargedCredits > 0) {
+          const unrendered = Math.max(0, plannedShots - framesRendered);
+          if (unrendered > 0) {
+            await refund(db, auth, imagesCost(model, unrendered), {
+              storyboardId: id,
+              note: `${unrendered} key frame${unrendered === 1 ? '' : 's'} did not render`,
+            }).catch(() => { /* never fail the stream over a refund */ });
+          }
+        }
         controller.close();
       }
     },
