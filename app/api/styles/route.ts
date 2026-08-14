@@ -3,7 +3,7 @@ import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession } from '@/src/lib/auth';
 import { listStyles, MAX_STYLE_IMAGES, MAX_STYLES_PER_USER } from '@/src/lib/styles';
-import { summariseStyle } from '@/src/lib/style-summary';
+import { compileStyleSpec } from '@/src/lib/style-compiler';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -89,11 +89,18 @@ export async function POST(request: NextRequest) {
     select: { id: true, name: true, image_urls: true },
   });
 
-  // Read the look back to the director so they can see how it was interpreted.
-  const summary = await summariseStyle(saved.name, saved.image_urls);
-  if (summary) await db.style.update({ where: { id: style.id }, data: { summary } });
+  // Compile the look now, once, so every render of every board that uses this
+  // style receives the same instruction. `reading` is the director's legibility
+  // check: if it describes the wrong look, the images need changing.
+  const spec = await compileStyleSpec(saved.name, saved.image_urls);
+  if (spec) {
+    await db.style.update({ where: { id: style.id }, data: { spec, summary: spec.reading } });
+  }
 
   return NextResponse.json({
-    style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls, summary },
+    style: {
+      id: saved.id, name: saved.name, imageUrls: saved.image_urls,
+      summary: spec?.reading ?? null,
+    },
   });
 }

@@ -15,8 +15,9 @@
  */
 
 import type { PrismaClient } from '@prisma/client';
-import { loadStyleImages, loadStyleSummary } from '@/src/lib/styles';
+import { loadStyleImages, loadStyleSpec } from '@/src/lib/styles';
 import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
+import { styleSpecToPrompt, type StyleSpec } from '@/src/schema/style-spec';
 
 export const WATERCOLOUR_STYLE =
   'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration. No photorealism, no CGI, no digital art. Naturalistic human anatomy and facial proportions throughout — eyes sized as in real life, iris occupying roughly one-third of visible eye height with natural sclera visible on both sides. No enlarged irises, no anime-style or cartoon-style eye exaggeration, no chibi proportions, no Disney-inflated eyes.';
@@ -37,7 +38,13 @@ export const STYLE_REFERENCE_LABEL =
  */
 export type StyleContext = {
   renderStyle: string;
-  /** STYLE_REF only: the written summary that carries the look into a prompt. */
+  /** STYLE_REF only: the compiled spec — the carrier of the look. */
+  spec: StyleSpec | null;
+  /**
+   * STYLE_REF only: the one-line reading. Used as the style text when there is
+   * no spec — a style saved before specs existed whose compile has not
+   * succeeded yet.
+   */
   summary: string | null;
   /** STYLE_REF only: the style's images, as inline conditioning data. */
   images: { data: string; mimeType: string }[];
@@ -53,15 +60,15 @@ export async function loadStyleContext(
   options: { withImages: boolean },
 ): Promise<StyleContext> {
   if (storyboard.render_style !== 'STYLE_REF') {
-    return { renderStyle: storyboard.render_style, summary: null, images: [] };
+    return { renderStyle: storyboard.render_style, spec: null, summary: null, images: [] };
   }
-  const [summary, images] = await Promise.all([
-    loadStyleSummary(db, storyboard),
+  const [{ spec, summary }, images] = await Promise.all([
+    loadStyleSpec(db, storyboard),
     options.withImages
       ? loadStyleImages(db, storyboard)
       : Promise.resolve([] as { data: string; mimeType: string }[]),
   ]);
-  return { renderStyle: storyboard.render_style, summary, images };
+  return { renderStyle: storyboard.render_style, spec, summary, images };
 }
 
 /** The focus-falloff line for a shot's scale, or empty when there's no grammar. */
@@ -83,12 +90,15 @@ export function styleDeclaration(ctx: StyleContext, scale?: string): string {
     return `OUTPUT STYLE (mandatory): ${WATERCOLOUR_STYLE}${dof(scale)} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
   }
   if (ctx.renderStyle === 'STYLE_REF') {
+    if (ctx.spec) {
+      return `${styleSpecToPrompt(ctx.spec)}${scale ? `\n${buildDofLine(scale)}` : ''}`;
+    }
     if (ctx.summary) {
       return `OUTPUT STYLE (mandatory): ${ctx.summary}${dof(scale)} Render every element of this frame in that style — including any character, location or object taken from a reference image. The references define WHO and WHAT appears; this directive defines HOW it is drawn.`;
     }
-    // No summary (the style predates summaries, or Claude was unreachable).
-    // The identity references still carry the look — they were themselves
-    // generated in this style.
+    // Neither spec nor reading — the style predates both and could not be
+    // compiled. The identity references still carry the look; they were
+    // themselves generated in this style.
     return `OUTPUT STYLE (mandatory): Match the visual style established by the reference images provided — their rendering medium, colour palette, lighting quality and texture.${dof(scale)} Render every element of this frame in that same style.`;
   }
   return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dof(scale)} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
@@ -117,6 +127,9 @@ export function shotStyleLine(ctx: StyleContext, scale?: string): string | null 
 export function refStyleLine(ctx: StyleContext): string {
   if (ctx.renderStyle === 'WATERCOLOUR_SKETCH') return `Style: ${WATERCOLOUR_STYLE}`;
   if (ctx.renderStyle === 'STYLE_REF') {
+    if (ctx.spec) {
+      return `${styleSpecToPrompt(ctx.spec)}\nThe STYLE REFERENCE image(s) provided show this same look.`;
+    }
     return ctx.summary
       ? `Style: ${ctx.summary} Match this style exactly, as shown in the provided style reference image(s).`
       : 'Style: Match the visual style of the provided style reference image(s).';

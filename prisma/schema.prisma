@@ -186,10 +186,14 @@ model Style {
   user        User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
   name        String
   image_urls  String[]     @default([])
-  // One or two sentences describing the look, written by Claude from the
-  // images. Shown to the user as a check that the style read correctly, and
-  // injected into generation prompts so the style survives on far fewer
-  // conditioning images (which would otherwise crowd out identity refs).
+  // The look, compiled from the images into a structured StyleSpec (see
+  // src/schema/style-spec.ts). This is the carrier of style in every prompt:
+  // rendered to a byte-identical block on every call, so forty-five shots get
+  // the same instruction rather than each re-reading the images.
+  spec        Json?
+  // One sentence naming the look, shown in the style picker. Mirrored from
+  // spec.reading so list views never parse the spec, and the only carrier left
+  // on styles saved before specs existed.
   summary     String?
   created_at  DateTime     @default(now())
   updated_at  DateTime     @updatedAt

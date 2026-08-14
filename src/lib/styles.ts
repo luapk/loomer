@@ -1,9 +1,14 @@
 /**
- * Named director styles — reference images plus a written summary, conditioned
- * into every generation so a board can be shot "in the style of" a saved look.
+ * Named director styles — reference images compiled into a structured spec,
+ * conditioned into every generation so a board can be shot "in the style of" a
+ * saved look.
+ *
+ * The images teach the look once, at authoring time. Generation reads the
+ * compiled spec, not the images — see src/schema/style-spec.ts for why.
  */
 
 import type { PrismaClient } from '@prisma/client';
+import { parseStyleSpec, type StyleSpec } from '@/src/schema/style-spec';
 
 /** Images a single style can hold. */
 export const MAX_STYLE_IMAGES = 6;
@@ -83,50 +88,41 @@ export async function loadStyleImages(
 }
 
 /**
- * The saved style's written summary.
+ * The saved style's compiled spec, plus the one-line reading for the director.
  *
- * Back-fills on first use: styles saved before summaries existed have none,
- * and since the summary is now the *only* carrier of style in a shot prompt,
- * leaving it null would quietly degrade every render of that style forever.
- * Written once, then read from the row.
+ * Back-fills on first use: styles saved before specs existed have none, and
+ * since the spec is the carrier of style in every prompt, leaving it null
+ * would quietly degrade every render of that style forever. Compiled once,
+ * then read from the row.
+ *
+ * `summary` is returned alongside so a style whose compile failed — or that
+ * predates specs and could not be compiled — still states its look in words
+ * rather than falling silent.
  */
-export async function loadStyleSummary(
+export async function loadStyleSpec(
   db: PrismaClient,
   storyboard: { style_id: string | null },
-): Promise<string | null> {
-  if (!storyboard.style_id) return null;
+): Promise<{ spec: StyleSpec | null; summary: string | null }> {
+  if (!storyboard.style_id) return { spec: null, summary: null };
   const style = await db.style.findUnique({
     where: { id: storyboard.style_id },
-    select: { name: true, summary: true, image_urls: true },
+    select: { name: true, spec: true, summary: true, image_urls: true },
   });
-  if (!style) return null;
-  if (style.summary) return style.summary;
-  if (style.image_urls.length === 0) return null;
+  if (!style) return { spec: null, summary: null };
+
+  const stored = parseStyleSpec(style.spec);
+  if (stored) return { spec: stored, summary: style.summary };
+  if (style.image_urls.length === 0) return { spec: null, summary: style.summary };
 
   // Imported lazily: this module is pulled into client bundles via the style
-  // picker types, and the summariser reaches for the Anthropic SDK.
-  const { summariseStyle } = await import('@/src/lib/style-summary');
-  const summary = await summariseStyle(style.name, style.image_urls);
-  if (summary) {
-    await db.style.update({ where: { id: storyboard.style_id }, data: { summary } });
-  }
-  return summary;
-}
+  // picker's types, and the compiler reaches for the Anthropic SDK.
+  const { compileStyleSpec } = await import('@/src/lib/style-compiler');
+  const compiled = await compileStyleSpec(style.name, style.image_urls);
+  if (!compiled) return { spec: null, summary: style.summary };
 
-/**
- * The mandatory style directive for a shot prompt.
- *
- * Text only. Shot prompts carry no style images at all: alongside identity
- * references the model kept sourcing content from them and character likeness
- * collapsed. The look reaches the frame through this sentence and through the
- * reference stills, which were themselves generated in the style.
- */
-export function styleDirective(summary: string | null): string {
-  if (summary) {
-    return `OUTPUT STYLE (mandatory): ${summary} Render every element of this frame in that style — including any character, location or object taken from a reference image. The references define WHO and WHAT appears; this directive defines HOW it is drawn.`;
-  }
-  // No summary yet (the style was saved before summaries, or Claude was
-  // unreachable). The identity references still carry the look, since they were
-  // themselves generated in this style.
-  return 'OUTPUT STYLE (mandatory): Match the visual style established by the reference images provided — their rendering medium, colour palette, lighting quality and texture. Render every element of this frame in that same style.';
+  await db.style.update({
+    where: { id: storyboard.style_id },
+    data: { spec: compiled, summary: compiled.reading },
+  });
+  return { spec: compiled, summary: compiled.reading };
 }

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { put } from '@vercel/blob';
 import { getDb } from '@/src/lib/db';
 import { requireSession } from '@/src/lib/auth';
 import { MAX_STYLE_IMAGES } from '@/src/lib/styles';
-import { summariseStyle } from '@/src/lib/style-summary';
+import { compileStyleSpec } from '@/src/lib/style-compiler';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -107,12 +108,18 @@ export async function PATCH(
     select: { id: true, name: true, image_urls: true },
   });
 
-  // The look may have shifted — re-read it. Best-effort.
-  const summary = await summariseStyle(saved.name, saved.image_urls);
-  if (summary) await db.style.update({ where: { id }, data: { summary } });
+  // The look may have shifted — recompile it. Best-effort: a failed compile
+  // leaves the previous spec in place rather than blanking the style.
+  const spec = await compileStyleSpec(saved.name, saved.image_urls);
+  if (spec) {
+    await db.style.update({ where: { id }, data: { spec, summary: spec.reading } });
+  }
 
   return NextResponse.json({
-    style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls, summary },
+    style: {
+      id: saved.id, name: saved.name, imageUrls: saved.image_urls,
+      summary: spec?.reading ?? null,
+    },
   });
 }
 
@@ -141,10 +148,21 @@ export async function DELETE(
       data: { image_urls: remaining },
       select: { id: true, name: true, image_urls: true },
     });
-    const summary = await summariseStyle(saved.name, saved.image_urls);
-    await db.style.update({ where: { id }, data: { summary } });
+    // Removing an image can change the look — recompile from what's left. With
+    // no images left there is nothing to compile, so the spec is cleared rather
+    // than left describing images the style no longer has.
+    const spec = saved.image_urls.length > 0
+      ? await compileStyleSpec(saved.name, saved.image_urls)
+      : null;
+    await db.style.update({
+      where: { id },
+      data: { spec: spec ?? Prisma.DbNull, summary: spec?.reading ?? null },
+    });
     return NextResponse.json({
-      style: { id: saved.id, name: saved.name, imageUrls: saved.image_urls, summary },
+      style: {
+        id: saved.id, name: saved.name, imageUrls: saved.image_urls,
+        summary: spec?.reading ?? null,
+      },
     });
   }
 
