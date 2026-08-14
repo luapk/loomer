@@ -8,7 +8,7 @@ import { getReferenceStills, upsertReferenceStill } from '@/src/lib/frame-store'
 import type { RefEntity } from '@/src/lib/reference-stills';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
 import { PHOTOREAL_STYLE } from '@/src/lib/photoreal-style';
-import { debit, refund, imagesCost, imageCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
+import { debit, refund, imagesCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 800;
@@ -46,21 +46,6 @@ function buildPrompt(
   return `${REF_PREAMBLE}\n\nStyle: ${PHOTOREAL_STYLE}\n\n${base}`;
 }
 
-async function fetchImageAsBase64(
-  url: string,
-): Promise<{ data: string; mimeType: string } | null> {
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const contentType = res.headers.get('content-type') ?? 'image/jpeg';
-    const mimeType = contentType.split(';')[0]?.trim() ?? 'image/jpeg';
-    const arrayBuffer = await res.arrayBuffer();
-    const data = Buffer.from(arrayBuffer).toString('base64');
-    return { data, mimeType };
-  } catch {
-    return null;
-  }
-}
 
 // Generate one image, retrying on 429/400 with exponential backoff (up to 3 attempts).
 // Returns base64 bytes + mime type, or null if the response contains no image part.

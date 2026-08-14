@@ -22,7 +22,6 @@ const candidateCount = process.argv.includes('--all4') ? 4 : 1;
 
 const STYLE = 'Cinematic photoreal, British coastal naturalism. Shot by Roger Deakins. Film: Kodak Vision3 500T. Naturalistic warm whites, restrained saturation. Naturalistic, motivated by visible practicals.';
 
-const WATERCOLOUR = 'Pencil sketch with simple watercolour wash. Clean hand-drawn pencil line work, loose gestural marks, flat areas of muted translucent watercolour colour, white paper showing through, minimal detail. Traditional storyboard illustration.';
 
 const entities = [
   {
