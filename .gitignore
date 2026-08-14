@@ -28,3 +28,8 @@ Thumbs.db
 *.swp
 *.swo
 scripts/dump-schema.ts
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/

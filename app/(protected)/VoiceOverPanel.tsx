@@ -169,26 +169,19 @@ export function VoiceOverPanel({
       )}
 
       {/* Voice picker */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {(voices ?? []).map((v) => {
-          const active = voice === v.slot;
-          return (
-            <button
-              key={v.slot}
-              type="button"
-              onClick={() => setVoice(v.slot)}
-              disabled={busy}
-              title={v.description}
-              className={`rounded-xl border p-3 text-left transition-all disabled:opacity-50 ${
-                active ? 'border-stone-900 bg-stone-900 text-white' : 'border-stone-200 hover:border-stone-300 bg-white'
-              }`}
-            >
-              <Mic className={`h-3.5 w-3.5 mb-1.5 ${active ? 'text-white' : 'text-stone-500'}`} />
-              <p className={`text-xs font-medium ${active ? 'text-white' : 'text-stone-900'}`}>{v.label}</p>
-            </button>
-          );
-        })}
-      </div>
+      <label className="block">
+        <span className="sr-only">Voice</span>
+        <select
+          value={voice}
+          onChange={(e) => setVoice(e.target.value)}
+          disabled={busy || voices === null}
+          className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 focus:outline-none focus:border-stone-400 disabled:opacity-50"
+        >
+          {(voices ?? []).map((v) => (
+            <option key={v.slot} value={v.slot}>{v.label}</option>
+          ))}
+        </select>
+      </label>
 
       <div className="flex items-center gap-2">
         <button
