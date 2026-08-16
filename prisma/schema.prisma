@@ -20,6 +20,21 @@ model User {
   credit_ledger CreditLedger[]
   styles        Style[]
 
+  // Stripe customer, created on first checkout and reused so a saved card can
+  // be charged off-session for auto-reload.
+  //
+  // Deliberately NOT @unique: the build script runs `prisma db push` without
+  // --accept-data-loss, and adding a unique constraint to an existing table
+  // raises a data-loss warning that fails the deploy. Only ensureCustomer
+  // writes this column, and only once per user, so uniqueness holds anyway.
+  stripe_customer_id    String?
+  // Pack id to recharge with when the balance runs low; null = auto-reload off.
+  auto_reload_pack      String?
+  auto_reload_threshold Int      @default(25)
+  // Set when an off-session charge fails (expired card). Surfaces a banner and
+  // stops us retrying on every debit.
+  auto_reload_failed_at DateTime?
+
   @@map("users")
 }
 

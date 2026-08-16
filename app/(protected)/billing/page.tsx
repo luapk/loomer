@@ -5,15 +5,10 @@ import { getDb } from '@/src/lib/db';
 import { ensureStarterCredits, getBalance, IMAGE_CREDIT_COST, PARSE_CREDIT_COST } from '@/src/lib/credits';
 import { Badge } from '@/src/components/ui/badge';
 import { AdminGrantPanel } from './AdminGrantPanel';
+import { BuyCredits } from './BuyCredits';
+import { PACKS, isConfigured as stripeConfigured } from '@/src/lib/stripe';
 
 export const dynamic = 'force-dynamic';
-
-/** Packs as documented in docs/decisions/REVISIT-billing.md. */
-const PACKS = [
-  { price: '£10', credits: 150, note: 'about three storyboards' },
-  { price: '£25', credits: 400, note: '7% bonus credits', highlight: true },
-  { price: '£50', credits: 850, note: '13% bonus credits' },
-];
 
 const MODEL_LABELS: Record<string, string> = {
   'gemini-2.5-flash-image': 'Flash — fastest, best value',
@@ -86,26 +81,16 @@ export default async function BillingPage() {
       {/* Packs */}
       <div className="space-y-3">
         <h2 className="text-sm font-semibold text-stone-900">Top up</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {PACKS.map((pack) => (
-            <div
-              key={pack.price}
-              className={`rounded-xl border p-4 ${pack.highlight ? 'border-stone-900' : 'border-stone-200'}`}
-            >
-              <p className="text-xl font-semibold text-stone-900">{pack.price}</p>
-              <p className="text-sm text-stone-600 mt-0.5 tabular-nums">{pack.credits} credits</p>
-              <p className="text-xs text-stone-400 mt-1">{pack.note}</p>
-            </div>
-          ))}
-        </div>
-        <div className="rounded-xl border border-stone-200 bg-stone-50 p-4">
-          <p className="text-sm text-stone-700 font-medium">Card payment isn&rsquo;t switched on yet.</p>
-          <p className="text-xs text-stone-500 mt-1">
-            Checkout is designed and specced but not built — see{' '}
-            <code className="text-[11px]">docs/decisions/REVISIT-billing.md</code>. Until it ships,
-            ask Paul to add credits to your account and they&rsquo;ll appear here immediately.
-          </p>
-        </div>
+        <BuyCredits
+          configured={stripeConfigured()}
+          packs={PACKS.map((p) => ({
+            id: p.id,
+            label: p.label,
+            credits: p.credits,
+            note: p.note,
+            highlight: p.id === 'medium',
+          }))}
+        />
       </div>
 
       {/* What things cost */}

@@ -152,6 +152,14 @@ export async function debit(
       ...(opts.note ? { note: opts.note } : {}),
     },
   });
+
+  // Top up in the background if this debit crossed the user's threshold.
+  // Deliberately not awaited and never allowed to throw: a card problem must
+  // not fail the generation the user just paid for.
+  void import('@/src/lib/auto-reload')
+    .then(({ maybeAutoReload }) => maybeAutoReload(db, session.uid))
+    .catch(() => { /* auto-reload is best-effort by design */ });
+
   return amount;
 }
 

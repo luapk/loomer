@@ -1,6 +1,6 @@
 # REVISIT: Billing — credit packs so users fund their own generation
 
-**Status**: Proposed — awaiting approval before implementation
+**Status**: Implemented (14 Aug 2026). Currency and VAT decided below.
 **Date**: 2026-08-14
 **Requested by**: Paul ("how can other people buy tokens… I'm not footing the bill")
 
@@ -143,15 +143,47 @@ No alternative provider is proposed. Paddle/Lemon Squeezy act as merchant of
 record and handle VAT, which is attractive, but both take a significantly
 larger cut and neither is in the stack.
 
+## Decisions taken
+
+- **Currency: GBP.** Packs are £10/£25/£50 (150/400/850 credits). API costs are
+  in USD, so an adverse FX move compresses margin. Paul accepted that risk
+  explicitly rather than pricing in USD.
+- **VAT: not collected, deliberately deferred.** Paul's call, risk accepted and
+  documented. Stripe Tax can be switched on later without touching the credit
+  ledger — the grant path doesn't care what was charged, only that it settled.
+- **Stripe SDK, not hand-rolled.** Webhook signature verification is the wrong
+  place to save a dependency.
+
+## What was built
+
+- `src/lib/stripe.ts` — packs (GBP, in pence), client, customer creation.
+- `POST /api/billing/checkout` — hosted Checkout session. Optionally saves the
+  card (`setup_future_usage: off_session`) so auto top-up can charge it.
+- `POST /api/billing/webhook` — **the only place a purchase grants credits.**
+  Verifies the signature against `STRIPE_WEBHOOK_SECRET`, reads the raw body
+  (a reserialised body fails verification), and grants with
+  `payment_ref = stripe:<event.id>`. That column is unique, so Stripe's retries
+  are no-ops rather than double payouts.
+- `src/lib/auto-reload.ts` — off-session charge when a debit drops the balance
+  below the user's threshold. Never awaited by the debit path and never throws:
+  a card problem must not fail the render that triggered it. It charges but
+  never grants — the credit still arrives by webhook, with the same idempotency.
+  A decline is recorded and backed off for six hours.
+- `GET/POST /api/billing/auto-reload` — settings.
+- Billing UI: real purchase buttons, save-card opt-in, auto top-up controls.
+
 ## Risks and open questions
 
-- **Currency.** Packs are drafted in GBP against USD API costs. An adverse FX
-  move compresses margin. Pricing in USD removes the exposure but reads oddly
-  to UK agency clients. **Needs a decision.**
-- **VAT / sales tax.** Selling digital services to consumers has VAT
-  obligations that vary by buyer location. Stripe Tax can handle calculation
-  and collection, but registration is a real-world admin task, not a code
-  one. **Flagged for Paul — this is the item most likely to be overlooked.**
+- **VAT is not being collected.** Decided, not forgotten. Selling digital
+  services to consumers carries obligations that vary by buyer location; at
+  low volume the exposure is small, but it grows with revenue and is not
+  retroactively cheap to fix. Revisit before any real marketing push.
+- **FX.** GBP prices against USD costs. Margin moves with the rate; the pack
+  sizes are the lever if it drifts.
+- **`stripe_customer_id` is not unique in the database.** Adding a unique
+  constraint to an existing table makes `prisma db push` demand
+  `--accept-data-loss`, which would fail the Vercel build. Only `ensureCustomer`
+  writes it, once per user.
 - **Refunds.** No self-serve refund flow proposed. Manual via the Stripe
   dashboard plus an admin ledger grant.
 - **Credit expiry.** None proposed. Expiring prepaid credits is a common
