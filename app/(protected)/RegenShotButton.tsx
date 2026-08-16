@@ -20,7 +20,12 @@ interface Props {
   shotNumber: number;
   keyFramePrompt?: string;
   conditioningEntities?: EntityInfo[];
-  onSuccess: (url: string, history?: string[]) => void;
+  /**
+   * `keyFramePrompt` is present when the user edited the prompt — the board
+   * stores the edit, so the workspace must adopt it too or reopening this
+   * popover would show the superseded original.
+   */
+  onSuccess: (url: string, history?: string[], keyFramePrompt?: string) => void;
 }
 
 interface PopoverPosition {
@@ -153,8 +158,8 @@ export function RegenShotButton({
         setError(data.error ?? 'Regeneration failed');
         return;
       }
-      const data = (await res.json()) as { url: string; history?: string[] };
-      onSuccess(data.url, data.history);
+      const data = (await res.json()) as { url: string; history?: string[]; keyFramePrompt?: string };
+      onSuccess(data.url, data.history, data.keyFramePrompt);
     } catch {
       setError('Network error — please try again');
     } finally {

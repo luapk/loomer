@@ -302,7 +302,8 @@ export async function POST(
 
   // Build prompt — use override text if provided, otherwise the storyboard key frame prompt.
   // Style prefix always comes first; Director's note variations are appended regardless.
-  const keyFrameText = overridePrompt?.trim() ? overridePrompt.trim() : shot.key_frame_prompt;
+  const editedPrompt = overridePrompt?.trim() ?? '';
+  const keyFrameText = editedPrompt || shot.key_frame_prompt;
   // Omit the authoritative grammar line when variations are selected — a
   // cinematographic variation (POV, low angle, OTS…) deliberately departs
   // from the storyboard's grammar and must not be contradicted by it.
@@ -450,5 +451,57 @@ export async function POST(
   const history = prevUrl ? [prevUrl, ...prevHistory].slice(0, 10) : prevHistory;
   await upsertShotFrame(db, id, shotNumber, { status: 'done', url: blob.url, history });
 
-  return NextResponse.json({ url: blob.url, history });
+  // An edited prompt is a change to the board, not a one-off override. Persist
+  // it so reopening the prompt shows what actually produced the frame on screen
+  // rather than the superseded original. Variations are deliberately NOT
+  // persisted — a director's note is a transient instruction for one render.
+  const promptChanged = Boolean(editedPrompt) && editedPrompt !== shot.key_frame_prompt;
+  if (promptChanged) {
+    await persistKeyFramePrompt(db, id, shotNumber, editedPrompt);
+  }
+
+  return NextResponse.json({
+    url: blob.url,
+    history,
+    ...(promptChanged ? { keyFramePrompt: editedPrompt } : {}),
+  });
+}
+
+/**
+ * Writes one shot's key_frame_prompt back into parsed_json.
+ *
+ * parsed_json is a single Json column, so this is a read-modify-write and a
+ * concurrent board run could clobber it. Re-reading inside a transaction keeps
+ * the window to the transaction itself, and the shot is matched by number
+ * rather than index so a reorder landing in between can't move the edit onto
+ * the wrong frame.
+ */
+async function persistKeyFramePrompt(
+  db: ReturnType<typeof getDb>,
+  storyboardId: string,
+  shotNumber: number,
+  newPrompt: string,
+): Promise<void> {
+  try {
+    await db.$transaction(async (tx) => {
+      const row = await tx.storyboard.findUnique({
+        where: { id: storyboardId },
+        select: { parsed_json: true },
+      });
+      const current = row?.parsed_json as unknown as ParsedStoryboard | null;
+      if (!current?.shots) return;
+      if (!current.shots.some((s) => s.shot_number === shotNumber)) return;
+
+      const shots = current.shots.map((s) =>
+        s.shot_number === shotNumber ? { ...s, key_frame_prompt: newPrompt } : s,
+      );
+      await tx.storyboard.update({
+        where: { id: storyboardId },
+        data: { parsed_json: { ...current, shots } as unknown as object },
+      });
+    });
+  } catch {
+    // The image rendered and is already saved — failing the request over a
+    // prompt write would lose the frame the user just paid for.
+  }
 }

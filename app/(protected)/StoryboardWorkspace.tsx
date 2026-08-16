@@ -382,6 +382,21 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
     }
   }
 
+  /**
+   * Adopt a prompt edit the server has already persisted, so the prompt shown
+   * in the regenerate popover is the one that produced the frame on screen.
+   */
+  function updateShotPrompt(shotNumber: number, keyFramePrompt: string) {
+    if (!('parsedJson' in state)) return;
+    const shots =
+      (state.parsedJson as { shots?: Record<string, unknown>[] } | null)?.shots ?? [];
+    if (shots.length === 0) return;
+    const next = shots.map((s) =>
+      (s.shot_number as number) === shotNumber ? { ...s, key_frame_prompt: keyFramePrompt } : s,
+    );
+    setState({ ...state, parsedJson: { ...(state.parsedJson as object), shots: next } } as typeof state);
+  }
+
   /** Remove a frame from the board, closing the gap. */
   async function deleteShot(storyboardId: string, shotNumber: number) {
     if (!('parsedJson' in state)) return;
@@ -1958,11 +1973,16 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
                         shotNumber={shot.shot_number as number}
                         keyFramePrompt={shot.key_frame_prompt as string | undefined}
                         conditioningEntities={allParsedEntities.filter(e => Boolean(refStills[e.id]?.selected))}
-                        onSuccess={(url, history) => {
+                        onSuccess={(url, history, keyFramePrompt) => {
                           setShotKeyFrames((prev) => ({
                             ...prev,
                             [n]: { status: 'done', url, history: history ?? prev[n]?.history },
                           }));
+                          // The server persisted an edited prompt — adopt it, or
+                          // reopening the popover would show the old text.
+                          if (keyFramePrompt) {
+                            updateShotPrompt(shot.shot_number as number, keyFramePrompt);
+                          }
                           // Reset to latest render and clear continuity issues
                           setShotHistoryIndex((prev) => ({ ...prev, [n]: 0 }));
                           setContinuityIssues((prev) => prev.filter((i) => i.shot_number !== (shot.shot_number as number)));
