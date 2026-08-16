@@ -69,6 +69,10 @@ export async function POST(
         const result = await parseStoryboard(markdown, {
           verbose: true,
           onProgress: (chars) => send({ type: 'progress', chars }),
+          // Real denominators, so the client can show "4 of 7 done" rather
+          // than a bar animated against nothing.
+          onPlan: (plan) => send({ type: 'plan', shots: plan.shots, jobs: plan.jobs }),
+          onJobDone: (done, total) => send({ type: 'job_done', done, total }),
         });
 
         if (!result.success || !result.storyboard) {

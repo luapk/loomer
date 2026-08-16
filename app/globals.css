@@ -90,3 +90,13 @@ body {
   max-width: 100%;
   overflow-x: hidden;
 }
+
+/* Indeterminate progress bar — used only while the real denominator is still
+   unknown. A determinate bar takes over the moment the shot count is read. */
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.animate-indeterminate {
+  animation: indeterminate 1.6s ease-in-out infinite;
+}

@@ -19,6 +19,7 @@ import { VoiceOverPanel, type VoiceOver } from './VoiceOverPanel';
 import { EndCardPanel, type EndCard } from './EndCardPanel';
 import { voiceOverLines } from '@/src/lib/voice-over';
 import { WaitCard } from './WaitCard';
+import { GenerationProgress, type ParseStats } from './GenerationProgress';
 
 // Animatic carries canvas playback + MediaRecorder export (~600 lines) that
 // most sessions never reach — load it only when the tab is opened.
@@ -76,50 +77,6 @@ type State =
       warnings: string[];
     }
   | { phase: 'error'; message: string };
-
-const GENERATE_MILESTONES: { ms: number; text: string }[] = [
-  { ms: 0,      text: 'Reading your script…' },
-  { ms: 4000,   text: 'Breaking down scenes and story structure…' },
-  { ms: 10000,  text: 'Establishing characters, locations and props…' },
-  { ms: 18000,  text: 'Designing shot sequences and coverage…' },
-  { ms: 28000,  text: 'Writing camera direction and lens choices…' },
-  { ms: 42000,  text: 'Assembling the storyboard…' },
-  { ms: 60000,  text: 'Refining continuity across scenes…' },
-  { ms: 80000,  text: 'Checking visual consistency…' },
-  { ms: 105000, text: 'Locking the shot list…' },
-];
-
-const PARSE_MILESTONES: { ms: number; text: string }[] = [
-  { ms: 0,     text: 'Extracting shot list…' },
-  { ms: 5000,  text: 'Mapping the continuity bible…' },
-  { ms: 12000, text: 'Validating scene integrity…' },
-  { ms: 22000, text: 'Locking the storyboard…' },
-];
-
-function useProgressMessage(active: boolean, milestones: { ms: number; text: string }[]) {
-  const [index, setIndex] = useState(0);
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-  useEffect(() => {
-    const clearAll = () => {
-      for (const id of timersRef.current) clearTimeout(id);
-      timersRef.current = [];
-    };
-    if (!active) {
-      setIndex(0);
-      clearAll();
-      return;
-    }
-    setIndex(0);
-    timersRef.current = milestones
-      .map((m, i) => (i === 0 ? null : setTimeout(() => setIndex(i), m.ms)))
-      .filter((id): id is ReturnType<typeof setTimeout> => id !== null);
-    return clearAll;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-
-  return milestones[index]?.text ?? milestones[milestones.length - 1]?.text ?? '';
-}
 
 export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboardId?: string }) {
   const [script, setScript] = useState('');
@@ -184,6 +141,11 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   // Manual frame insertion + drag reorder (boards tab)
   const [insertAt, setInsertAt] = useState<number | null>(null); // 1-based position
   const [pendingDelete, setPendingDelete] = useState<number | null>(null); // shot awaiting confirm
+  // Real progress signal from the parser: how many extraction passes it
+  // planned and how many have landed. Null until it reports its plan.
+  const [parseStats, setParseStats] = useState<ParseStats>(null);
+  const [stageStartedAt, setStageStartedAt] = useState<number>(() => Date.now());
+
   // Non-fatal notice shown above the tabs — out of credits, truncated board.
   // `action: 'billing'` adds the top-up link; plain notices omit it.
   const [notice, setNotice] = useState<{ message: string; action?: 'billing' } | null>(null);
@@ -209,8 +171,6 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
 
   const [activeTab, setActiveTab] = useState<Tab>('storyboard');
 
-  const generateMessage = useProgressMessage(state.phase === 'generating', GENERATE_MILESTONES);
-  const parseMessage = useProgressMessage(state.phase === 'parsing', PARSE_MILESTONES);
 
   const isLoaded =
     state.phase === 'parsed' ||
@@ -827,6 +787,8 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   }
 
   async function doParse(id: string, title: string, markdown: string) {
+    setParseStats(null);
+    setStageStartedAt(Date.now());
     setState({ phase: 'parsing', id, title, markdown, charsGenerated: 0 });
 
     let res: Response;
@@ -876,6 +838,16 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
             setState((prev) =>
               prev.phase === 'parsing' ? { ...prev, charsGenerated: chars } : prev,
             );
+          } else if (payload['type'] === 'plan') {
+            setParseStats({
+              shots: payload['shots'] as number,
+              jobs: payload['jobs'] as number,
+              done: 0,
+            });
+          } else if (payload['type'] === 'job_done') {
+            setParseStats((prev) => (prev
+              ? { ...prev, done: payload['done'] as number, jobs: payload['jobs'] as number }
+              : { shots: 0, done: payload['done'] as number, jobs: payload['total'] as number }));
           } else if (payload['type'] === 'done') {
             setState({
               phase: 'parsed',
@@ -945,6 +917,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
   async function generate() {
     if (!script.trim()) return;
     setState({ phase: 'generating', markdown: '' });
+    setStageStartedAt(Date.now());
     setActiveTab('storyboard');
 
     let res: Response;
@@ -1579,12 +1552,18 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
 
           {/* Progress — generating */}
           {isGenerating && (
-            <div className="glass rounded-2xl p-6 space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-stone-500 flex items-center gap-2">
-                  <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-                  {generateMessage}
-                </p>
+            <div className="space-y-3">
+              {/* Sticky so the live numbers stay on screen while the markdown
+                  preview below it grows past the fold. */}
+              <div className="sticky top-20 z-10">
+                <GenerationProgress
+                  stage="writing"
+                  markdown={'markdown' in state ? state.markdown : ''}
+                  parseStats={null}
+                  startedAt={stageStartedAt}
+                />
+              </div>
+              <div className="flex justify-end">
                 <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-stone-400 hover:text-stone-600" onClick={cancelActive}>
                   <X className="h-3 w-3 mr-1" />Cancel
                 </Button>
@@ -1599,15 +1578,14 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
 
           {/* Progress — parsing */}
           {isParsing && (
-            <div className="glass rounded-2xl p-6 space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-stone-500 flex items-center gap-2">
-                  <Loader2 className="h-3 w-3 animate-spin text-stone-400" />
-                  {parseMessage}
-                  {state.phase === 'parsing' && state.charsGenerated > 0 && (
-                    <span className="text-stone-400">· {state.charsGenerated.toLocaleString()} chars</span>
-                  )}
-                </p>
+            <div className="space-y-3">
+              <GenerationProgress
+                stage="parsing"
+                markdown={'markdown' in state ? state.markdown : ''}
+                parseStats={parseStats}
+                startedAt={stageStartedAt}
+              />
+              <div className="flex justify-end">
                 <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-stone-400 hover:text-stone-600" onClick={cancelActive}>
                   <X className="h-3 w-3 mr-1" />Cancel
                 </Button>

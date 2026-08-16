@@ -59,6 +59,16 @@ export interface ParseOptions {
   verbose?: boolean;
   /** Called incrementally as the tool-use JSON is generated. Useful for streaming progress. */
   onProgress?: (charsGenerated: number) => void;
+  /**
+   * Called once the work is planned, before any extraction starts.
+   *
+   * `jobs` is the real number of parallel model calls — one for the bible plus
+   * one per chunk of shots. This is what makes a truthful progress bar
+   * possible: the denominator is known up front rather than guessed.
+   */
+  onPlan?: (plan: { shots: number; jobs: number }) => void;
+  /** Called as each extraction job finishes. */
+  onJobDone?: (done: number, total: number) => void;
 }
 
 // ============================================================================
@@ -448,6 +458,17 @@ async function parseStoryboardChunked(
     );
   }
 
+  // The denominator for the client's progress bar: bible + one per chunk.
+  const totalJobs = chunks.length + 1;
+  options.onPlan?.({ shots: sections.shotBlocks.length, jobs: totalJobs });
+  let jobsDone = 0;
+  const markJobDone = <T>(promise: Promise<T>): Promise<T> =>
+    promise.then((value) => {
+      jobsDone++;
+      options.onJobDone?.(jobsDone, totalJobs);
+      return value;
+    });
+
   // Aggregate streaming progress across all parallel calls.
   const charsPerCall = new Map<number, number>();
   const reportProgress = options.onProgress
@@ -459,20 +480,20 @@ async function parseStoryboardChunked(
       }
     : () => undefined;
 
-  const globalsPromise = runExtraction(
+  const globalsPromise = markJobDone(runExtraction(
     client, model, 32000, 'parse_storyboard_globals', globalsSchema,
     GlobalsSchema,
     `Extract the storyboard metadata, style lock, continuity bible (characters, locations, props), and followability audit from this storyboard markdown. The per-shot blocks have been removed — do NOT extract shots.\n\n${sections.globals}`,
     reportProgress(0),
-  );
+  ));
 
   const chunkPromises = chunks.map((chunk, i) =>
-    runExtraction(
+    markJobDone(runExtraction(
       client, model, 16000, 'parse_storyboard_shots', chunkSchema,
       ShotsChunkSchema,
       `This is an excerpt of a storyboard document containing ONLY per-shot blocks (the header, bible, and audit are being extracted separately). Extract every shot present below, following your key_frame_prompt and shot-numbering rules. Use the shot number from each block heading as shot_number — do NOT renumber from 1.\n\n${chunk.join('\n')}`,
       reportProgress(i + 1),
-    ),
+    )),
   );
 
   let globals: z.infer<typeof GlobalsSchema>;
