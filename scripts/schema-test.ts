@@ -244,6 +244,33 @@ test('rejects missing key_frame_prompt on shot', () => {
   assertEq(result.success, false, 'expected validation failure');
 });
 
+test('accepts style lock registers', () => {
+  const withRegisters = JSON.parse(JSON.stringify(VALID_FIXTURE));
+  withRegisters.style_lock.registers = [
+    {
+      name: 'Register B — warm',
+      from_shot: 2,
+      to_shot: 2,
+      look: 'Bright and open',
+      colour_grade: 'Warm neutral whites',
+      lighting_register: null,
+      film_stock_feel: null,
+      texture: null,
+    },
+  ];
+  const result = ParsedStoryboardSchema.safeParse(withRegisters);
+  assertEq(result.success, true, 'expected validation success');
+});
+
+test('accepts shot screen positions', () => {
+  const withPositions = JSON.parse(JSON.stringify(VALID_FIXTURE));
+  withPositions.shots[0].continuity.screen_positions = [
+    { entity_id: 'CHAR-MAYA', position: 'frame-left, seated, facing right' },
+  ];
+  const result = ParsedStoryboardSchema.safeParse(withPositions);
+  assertEq(result.success, true, 'expected validation success');
+});
+
 console.log();
 console.log(c.bold(`Field shapes:`));
 
@@ -275,7 +302,7 @@ test('shot has key_frame_prompt populated', () => {
 console.log();
 console.log(c.bold(`Result:`));
 if (failed === 0) {
-  console.log(c.green(`  ✔ ${passed}/${passed + failed} tests passed`)); // expect 10
+  console.log(c.green(`  ✔ ${passed}/${passed + failed} tests passed`)); // expect 12
   process.exit(0);
 } else {
   console.log(c.red(`  ✖ ${failed} of ${passed + failed} tests failed`));

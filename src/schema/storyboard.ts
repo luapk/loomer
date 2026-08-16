@@ -24,6 +24,37 @@ import { z } from 'zod';
 // ============================================================================
 
 /**
+ * A visual register — a stretch of shots that deliberately departs from the
+ * board's baseline look (a noir first act that warms in the third, a flashback
+ * in a different stock, a dream sequence).
+ *
+ * The style lock used to be single-valued, so a board that declared two
+ * registers could only carry one of them and every shot got the same grade.
+ * See docs/decisions/REVISIT-style-lock-registers.md.
+ */
+export const StyleRegisterSchema = z.object({
+  name: z.string().describe('e.g. "Register A — interrogation noir"'),
+  from_shot: z
+    .number()
+    .int()
+    .positive()
+    .describe('First shot number this register covers, inclusive.'),
+  to_shot: z
+    .number()
+    .int()
+    .positive()
+    .describe('Last shot number this register covers, inclusive.'),
+  look: z.string().nullable().describe('Overrides style_lock.look for these shots. null to inherit.'),
+  colour_grade: z.string().nullable().describe('Overrides style_lock.colour_grade. null to inherit.'),
+  lighting_register: z
+    .string()
+    .nullable()
+    .describe('Overrides style_lock.lighting_register. null to inherit.'),
+  film_stock_feel: z.string().nullable().describe('Overrides style_lock.film_stock_feel. null to inherit.'),
+  texture: z.string().nullable().describe('Overrides style_lock.texture. null to inherit.'),
+});
+
+/**
  * The style lock — the look-and-feel spec that gets injected into every
  * shot prompt for global consistency.
  */
@@ -54,6 +85,13 @@ export const StyleLockSchema = z.object({
     .string()
     .describe(
       'The full style lock block as it appears in the markdown, paste-ready for prompt injection. Include line breaks.',
+    ),
+  registers: z
+    .array(StyleRegisterSchema)
+    .nullable()
+    .optional()
+    .describe(
+      'Distinct visual registers, when the storyboard declares more than one (e.g. "Register A (shots 01-09): cold noir. Register B (shots 10-14): warm"). Each entry states the shot range it covers and only the fields that differ from the baseline lock above. null or omitted when the board holds one look throughout.',
     ),
 });
 
@@ -228,6 +266,25 @@ export const ShotContinuitySchema = z.object({
     .describe('Props newly introduced in this shot.'),
   light_direction: z.string().describe('Where light comes from in this shot.'),
   time_of_day: z.string().describe('Specific time. e.g. "Late afternoon, ~4:30pm"'),
+  screen_positions: z
+    .array(
+      z.object({
+        entity_id: z
+          .string()
+          .regex(/^CHAR-[A-Z0-9-]+$/)
+          .describe('Which character this position describes.'),
+        position: z
+          .string()
+          .describe(
+            'Where they sit in the frame, in plain terms. e.g. "frame-left, seated, facing right", "frame-right foreground, back to camera".',
+          ),
+      }),
+    )
+    .nullable()
+    .optional()
+    .describe(
+      'Where each character sits in the frame, for shots with two or more characters. Only include what the shot block actually states or clearly implies from the grammar (line of interest, screen direction, triangle position). Omit or set null when the source does not say. This is what tells the image model which identity reference belongs to which person on screen.',
+    ),
 });
 
 export const ShotSoundDesignSchema = z.object({

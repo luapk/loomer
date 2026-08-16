@@ -5,11 +5,15 @@ import { getDb } from '@/src/lib/db';
 import { requireSession, assertStoryboardAccess } from '@/src/lib/auth';
 import { loadStyleSummary, styleDirective } from '@/src/lib/styles';
 import { isVoiceOnlyCharacter } from '@/src/lib/character-identity';
-import { uniqueVisualLabels } from '@/src/lib/entity-labels';
+import { uniqueVisualLabels, conditioningLabel } from '@/src/lib/entity-labels';
 import { getReferenceStills, upsertShotFrame } from '@/src/lib/frame-store';
 import { debit, refund, imageCost, InsufficientCreditsError, insufficientPayload } from '@/src/lib/credits';
 import type { ParsedStoryboard } from '@/src/schema/storyboard';
-import { PHOTOREAL_STYLE, buildDofLine } from '@/src/lib/photoreal-style';
+import { buildDofLine } from '@/src/lib/photoreal-style';
+import { styleTextForShot, buildPhotorealDeclaration } from '@/src/lib/style-lock-prompt';
+import { buildStoryStateLine } from '@/src/lib/shot-state';
+import { rewriteNegations } from '@/src/lib/positive-phrasing';
+import { buildScreenBindingLine } from '@/src/lib/screen-binding';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -58,28 +62,44 @@ function buildGrammarLine(grammar: ParsedStoryboard['shots'][number]['grammar'])
   );
 }
 
-function buildShotPrompt(
-  keyFramePrompt: string,
-  renderStyle: string,
-  styleLock: ParsedStoryboard['style_lock'],
-  grammar?: ParsedStoryboard['shots'][number]['grammar'],
-): string {
+interface ShotPromptOptions {
+  keyFramePrompt: string;
+  renderStyle: string;
+  styleLock: ParsedStoryboard['style_lock'];
+  shotNumber?: number;
+  grammar?: ParsedStoryboard['shots'][number]['grammar'];
+  storyState?: string;
+}
+
+function buildShotPrompt({
+  keyFramePrompt,
+  renderStyle,
+  styleLock,
+  shotNumber,
+  grammar,
+  storyState,
+}: ShotPromptOptions): string {
   const grammarLine = grammar ? `${buildGrammarLine(grammar)}\n\n` : '';
+  const body = rewriteNegations(keyFramePrompt);
+  const stateBlock = storyState ? `\n\n${storyState}` : '';
+
   if (renderStyle === 'WATERCOLOUR_SKETCH') {
-    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${keyFramePrompt}`;
+    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${WATERCOLOUR_STYLE}\n\n${body}${stateBlock}`;
   }
   if (renderStyle === 'STYLE_REF') {
-    // Style comes from the directive + reference images. Emitting the photoreal
-    // block here would contradict them outright.
-    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${keyFramePrompt}`;
+    // Style comes from the named style's written summary. Emitting a photoreal
+    // block here would contradict it outright.
+    return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}${body}${stateBlock}`;
   }
   const dofLine = grammar ? `${buildDofLine(grammar.scale)} ` : '';
-  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${PHOTOREAL_STYLE} ${dofLine}\n\n${keyFramePrompt}`;
+  const styleText = styleTextForShot(styleLock, shotNumber);
+  return `${SINGLE_FRAME_GUARD}\n\n${grammarLine}Style: ${styleText} ${dofLine}\n\n${body}${stateBlock}`;
 }
 
 function buildStyleDeclaration(
   renderStyle: string,
-  _styleLock: ParsedStoryboard['style_lock'],
+  styleLock: ParsedStoryboard['style_lock'],
+  shotNumber?: number,
   grammar?: ParsedStoryboard['shots'][number]['grammar'],
   styleSummary: string | null = null,
 ): string {
@@ -89,8 +109,7 @@ function buildStyleDeclaration(
   if (renderStyle === 'STYLE_REF') {
     return styleDirective(styleSummary);
   }
-  const dofLine = grammar ? ` ${buildDofLine(grammar.scale)}` : '';
-  return `OUTPUT STYLE (mandatory): ${PHOTOREAL_STYLE}${dofLine} Every element in the output MUST conform to this style — including characters and locations taken from reference images.`;
+  return buildPhotorealDeclaration(styleLock, shotNumber, grammar?.scale);
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +145,7 @@ async function generateOneShot(
   conditioningEntities: { name: string; url: string }[],
   _prevFrameResult: null = null,
   styleRefImages: { data: string; mimeType: string }[] = [],
+  screenBinding: string | null = null,
 ): Promise<{ data: string; mimeType: string } | null> {
   const entityResults = await Promise.all(
     conditioningEntities.map((e) => fetchImageAsBase64(e.url)),
@@ -153,13 +173,15 @@ async function generateOneShot(
   if (loadedEntities.length > 0) {
     parts.push({ text: '[IDENTITY REFERENCES: The labelled images below define ONLY the visual appearance of each entity — its shape, colour, texture, materials, and distinguishing features. Extract this visual identity and render it in the OUTPUT STYLE declared above. DO NOT copy the spatial position, orientation, camera angle, perspective geometry, or compositional arrangement from any reference image. The shot description governs ALL composition — where entities are placed, which direction they face, how the camera frames the scene. References answer "what does it look like?" only; the shot prompt answers "how is the scene composed?". DISREGARD any colour, material, or appearance adjective in the prompt text for these entities — the reference image overrides it. Do NOT copy the photographic medium of the references.]' });
     for (const { name, img } of loadedEntities) {
-      // Strip appearance descriptor (everything after " — ") from the label so the
-      // label text does not contradict the reference image.
-      const labelName = name.split(/\s[—–]\s/)[0]?.trim() ?? name;
-      parts.push({ text: `[Reference — ${labelName}:]` });
+      parts.push({ text: `[Reference — ${conditioningLabel(name)}:]` });
       parts.push({ inlineData: { data: img.data, mimeType: img.mimeType } });
     }
   }
+
+  // Immediately after the references, while their labels are still the most
+  // recent thing in context.
+  if (screenBinding) parts.push({ text: screenBinding });
+
   parts.push({ text: prompt });
 
   const delays = [5000, 15000, 30000];
@@ -285,7 +307,14 @@ export async function POST(
   // cinematographic variation (POV, low angle, OTS…) deliberately departs
   // from the storyboard's grammar and must not be contradicted by it.
   const grammarForRegen = variations.length > 0 ? undefined : shot.grammar;
-  let prompt = buildShotPrompt(keyFrameText, renderStyle, parsed.style_lock, grammarForRegen);
+  let prompt = buildShotPrompt({
+    keyFramePrompt: keyFrameText,
+    renderStyle,
+    styleLock: parsed.style_lock,
+    shotNumber: shot.shot_number,
+    grammar: grammarForRegen,
+    storyState: buildStoryStateLine(parsed, shot),
+  });
   if (variations.length > 0) {
     // For OTS / dirty-single variations, inject the shot's character names so the model
     // knows which character to blur vs keep in focus.
@@ -312,10 +341,11 @@ export async function POST(
   const selectedRefUrl = (entityId: string): string | null =>
     refStills[entityId]?.selected ?? null;
 
+  const visibleCharacterIds = shot.continuity.characters.filter(
+    (cid) => !isVoiceOnlyCharacter(cid, entityNames[cid] ?? ''),
+  );
   const continuityIds = new Set<string>([
-    ...shot.continuity.characters.filter(
-      (cid) => !isVoiceOnlyCharacter(cid, entityNames[cid] ?? ''),
-    ),
+    ...visibleCharacterIds,
     shot.continuity.location_id,
     ...shot.continuity.props_persisting,
     ...shot.continuity.props_introduced,
@@ -340,6 +370,17 @@ export async function POST(
 
   const conditioningEntities = [...primaryEntities, ...secondaryEntities];
 
+  // Only characters whose reference actually got attached can be bound to a
+  // position — naming a reference that isn't there would point at nothing.
+  const boundCharacterIds = visibleCharacterIds.filter(
+    (cid) => !excluded.has(cid) && selectedRefUrl(cid),
+  );
+  const screenBinding = buildScreenBindingLine(
+    boundCharacterIds,
+    (cid) => conditioningLabel(entityVisualLabels[cid] ?? entityNames[cid] ?? cid),
+    shot.continuity.screen_positions,
+  );
+
   const ai = new GoogleGenAI({ apiKey });
 
   // Fetch the style's images once for STYLE_REF mode.
@@ -353,7 +394,13 @@ export async function POST(
     ? await loadStyleSummary(db, storyboard)
     : null;
 
-  const styleDeclaration = buildStyleDeclaration(renderStyle, parsed.style_lock, shot.grammar, styleSummary);
+  const styleDeclaration = buildStyleDeclaration(
+    renderStyle,
+    parsed.style_lock,
+    shot.shot_number,
+    shot.grammar,
+    styleSummary,
+  );
 
   // Charge for the one image, refunded below if the model doesn't deliver.
   let chargedCredits = 0;
@@ -373,7 +420,7 @@ export async function POST(
 
   let img: { data: string; mimeType: string } | null;
   try {
-    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, null, styleRefImages);
+    img = await generateOneShot(ai, model, prompt, styleDeclaration, conditioningEntities, null, styleRefImages, screenBinding);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await refundCharge(`Shot ${shotNumber} regen failed`);

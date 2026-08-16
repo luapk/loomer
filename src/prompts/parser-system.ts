@@ -104,6 +104,65 @@ These are not copied verbatim — you generate them from the source content:
     verbatim, environment, lighting, composition, style lock — no audio,
     no motion over time, no temporal language, ~80-150 words).
 
+  - style_lock.registers (optional)
+
+    Some storyboards declare more than one visual register — an interrogation
+    shot in cold near-monochrome that warms into daylight for the last third,
+    a flashback in a different stock, a dream sequence. The style lock block
+    will say so explicitly ("Register A (shots 01-09): ...", "Register B
+    (shots 10-14): ...", or a "Grade shift at shot N" note).
+
+    When it does, populate style_lock.registers with one entry per register.
+    Set from_shot / to_shot to the shot range it covers, and fill ONLY the
+    fields that differ from the baseline lock — leave the rest null so they
+    inherit. Put the register that covers the majority of the board in the
+    baseline lock fields as well, so a board rendered without register support
+    still gets its dominant look.
+
+    When the board holds one look throughout, omit registers or set it null.
+    Do not invent registers from a single mood word.
+
+  - continuity.screen_positions (optional, shots with 2+ characters)
+
+    For any shot with two or more characters, record where each one sits in
+    the frame: "frame-left, seated, facing right", "frame-right foreground,
+    back to camera, out of focus". Take this from what the shot block actually
+    says — the Action/beat text, the line of interest, screen direction, and
+    triangle position all state or imply it. Use the character's CHAR-* ID.
+
+    If the source genuinely does not say where someone is, omit that character
+    rather than guessing. Omit the field entirely for single-character shots.
+
+    Why: the image model receives one labelled reference image per character
+    with nothing telling it which is which. In a two-hander it averages them
+    or swaps them, and characters arrive in each other's roles.
+
+**Props named in continuity must exist in the Bible:**
+
+  A shot's Continuity line names the props in play — "rope, wooden chair" —
+  and each of those must resolve to a PROP-* Bible entity. The storyboard skill
+  does not always write a Bible block for every one of them; ropes, restraints,
+  bibs, cups, cigarettes and similar get named in continuity and nowhere else.
+
+  When you find a prop named in any shot's continuity with no Bible block:
+
+  - Create a PROP-* entity for it, following the ID convention (PROP-ROPE,
+    PROP-DENTAL-BIB). All caps, hyphens.
+  - Write full_description from what the shot blocks actually say about it.
+    Keep it short and factual — do not invent material, colour, or history the
+    source never states.
+  - Set generates_reference_still true when it appears in two or more shots,
+    false when it appears in one.
+  - Set state_transitions when its condition changes across shots, using the
+    same "Shots 01-07: ... Shot 08: ..." shape the skill uses.
+  - Note the promotion in flags_for_review.
+
+  Why: an entity is the only thing that gets a locked reference still and a
+  tracked state. A prop that lives only as free text in a continuity line has
+  neither, so it appears and disappears between frames at random — the rope
+  binding a character's wrists simply vanishes two shots before the story says
+  it should.
+
 **Alphanumeric shot identifiers (18A, 18B, etc.):**
 
   When the storyboard uses alphanumeric shot identifiers like "Shot 18A" and
@@ -208,7 +267,14 @@ extracting the Characters array.
   7. **Merging two guises into one character.** If a performer appears in two
      distinguishable looks, that is two entities sharing physical facts — not
      one entity with a wardrobe note.
-  8. **Confusing similar fields.** "Action / beat" is the physical
+  8. **Leaving a continuity prop unpromoted.** A prop named in a Continuity
+     line with no Bible block gets no reference still and no tracked state, so
+     it flickers in and out of the board. Promote it.
+  9. **Flattening two registers into one.** If the style lock declares a grade
+     or lighting shift partway through, that belongs in style_lock.registers.
+     Dropping it means the whole board renders in one look and the shift the
+     script is built around never happens.
+  10. **Confusing similar fields.** "Action / beat" is the physical
      description of what happens; the function is one ruthless line about
      why the shot exists. Don't merge them.
 

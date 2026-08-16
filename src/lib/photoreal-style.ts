@@ -2,7 +2,25 @@
 // Anchors the model to a specific camera/lens/grade signature before any
 // reference images are injected, so photographic medium is locked early.
 
-export const PHOTOREAL_STYLE =
+/**
+ * The medium guard. Orthogonal to any particular look — it says only "this is a
+ * photograph, not a drawing". Every photoreal declaration ends with it,
+ * including ones assembled from a storyboard's own style lock.
+ */
+export const PHOTOREAL_MEDIUM_GUARD =
+  'PHOTOREALISTIC PHOTOGRAPH. NOT an illustration, NOT a painting, NOT a sketch, NOT watercolour, ' +
+  'NOT digital art, NOT anime, NOT cartoon. Naturalistic human anatomy throughout.';
+
+/**
+ * Loomer's fallback house look, used ONLY when the storyboard has no usable
+ * style lock of its own.
+ *
+ * This used to be emitted unconditionally, which meant a board whose style lock
+ * asked for crushed blacks and near-monochrome got "No crushed blacks" bolted
+ * on in front of every shot prompt. The lock wins now — see
+ * src/lib/style-lock-prompt.ts.
+ */
+export const PHOTOREAL_HOUSE_STYLE =
   'Shot on Arri Alexa 35 with anamorphic lenses — Panavision C-Series or Atlas Orion glass. ' +
   'Oval bokeh on out-of-focus highlights. Subtle horizontal lens breathing. Natural vignette. ' +
   'Cinematography in the tradition of Roger Deakins — controlled, precise, every light source ' +
@@ -13,9 +31,9 @@ export const PHOTOREAL_STYLE =
   'cold blue-grey for night and overcast exteriors, neutral for daylight — never forced or uniform. ' +
   'Grade: slightly underexposed overall, lifted blacks, desaturated midtones, naturalistic skin tones. ' +
   'No teal-and-orange push. No crushed blacks. No HDR processing. No CGI render quality. ' +
-  'Organic 35mm film grain — textured and present, never digital noise, never clean. ' +
-  'PHOTOREALISTIC PHOTOGRAPH. NOT an illustration, NOT a painting, NOT a sketch, NOT watercolour, ' +
-  'NOT digital art, NOT anime, NOT cartoon. Naturalistic human anatomy throughout.';
+  'Organic 35mm film grain — textured and present, never digital noise, never clean. ';
+
+export const PHOTOREAL_STYLE = `${PHOTOREAL_HOUSE_STYLE}${PHOTOREAL_MEDIUM_GUARD}`;
 
 // Depth-of-field directive derived from the shot's scale grammar field.
 // Injected into the style declaration so the model locks focus intent before

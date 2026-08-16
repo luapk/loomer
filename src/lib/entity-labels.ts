@@ -55,6 +55,19 @@ function excerpt(prompt: string): string {
 export type LabelledEntity = { id: string; prompt: string };
 
 /**
+ * The exact text used inside the `[Reference — X:]` marker.
+ *
+ * Anything after an em-dash is an appearance descriptor, and the reference
+ * image is the appearance authority — leaving it in lets the label contradict
+ * the picture. Everything that names a reference (the marker itself, the screen
+ * binding) must go through here, or the binding names a label that was never
+ * emitted.
+ */
+export function conditioningLabel(name: string): string {
+  return name.split(/\s[—–]\s/)[0]?.trim() ?? name;
+}
+
+/**
  * Builds a label per entity id, guaranteed unique within the set.
  *
  * Where two entities would share a label, each is qualified with what
