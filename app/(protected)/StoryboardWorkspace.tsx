@@ -1179,7 +1179,7 @@ export function StoryboardWorkspace({ initialStoryboardId }: { initialStoryboard
               <h1 className="display-serif" style={{ fontSize: 40, lineHeight: 0.95, letterSpacing: '-0.02em', color: 'var(--ink)' }}>
                 {isLoaded && 'title' in state ? toTitleCase(state.title)
                   : (isGenerating || isParsing) && 'title' in state && state.title ? toTitleCase(state.title)
-                  : <em>Fuelled by film theory. Fine tune on the fly.</em>}
+                  : <em>Fine tune with film theory.</em>}
               </h1>
               {isLoaded && 'title' in state && (
                 <button
